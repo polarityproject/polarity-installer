@@ -1,11 +1,11 @@
 # Compares this repo's copies of the client's update code with the client's
-# own (polarity-client, the sfv-rollback folder beside this one by default).
+# own (polarity-client, the folder beside this one by default).
 # The release key must match: a mismatch exits 1 (the installer would refuse
 # every release). The rest is reported for a look:
 #   json.h/.cpp        should be identical
 #   update_info.h/.cpp differ only by this copy's Linux (mbedTLS) parts
 #   scripts\check-shared.ps1 [-Client <folder>]
-param([string]$Client = (Join-Path $PSScriptRoot '..\..\sfv-rollback'))
+param([string]$Client = (Join-Path $PSScriptRoot '..\..\polarity-client'))
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $Client = (Resolve-Path $Client).Path
