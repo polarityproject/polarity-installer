@@ -10,19 +10,28 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
+# The commit the build scripts pass, for the top of the log.
+if(POLARITY_INSTALLER_COMMIT)
+  add_compile_definitions(POLARITY_INSTALLER_COMMIT="${POLARITY_INSTALLER_COMMIT}")
+endif()
 
 if(WIN32)
   # The static CRT: the exe runs without the Visual C++ runtime installed.
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-  add_compile_options(/W4 /permissive- /utf-8)
+  add_compile_options(/W4 /permissive- /utf-8 /Zi)
   add_compile_definitions(_CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
 
   add_library(shared STATIC src/core/update_info.cpp src/core/json.cpp)
   target_include_directories(shared PUBLIC src)
   target_link_libraries(shared PUBLIC bcrypt)
 
-  add_executable(polarity_installer WIN32 src/installer/installer_win.cpp src/installer/installer.rc)
+  add_executable(polarity_installer WIN32 src/installer/installer_win.cpp src/installer/install_log.cpp
+                 src/installer/installer.rc)
   set_target_properties(polarity_installer PROPERTIES OUTPUT_NAME polarity-installer)
+  # A .pdb beside the exe (kept, not shipped): reads the crash addresses in a log.
+  # The exe names it without a folder: a symbolizer looks beside the exe, and
+  # the build machine's paths stay out of the shipped file.
+  target_link_options(polarity_installer PRIVATE /DEBUG /OPT:REF /OPT:ICF /PDBALTPATH:%_PDB%)
   target_link_libraries(polarity_installer PRIVATE shared winhttp comctl32 shell32 ole32)
 else()
   # One static binary for any x86_64 Linux: musl (its static getaddrinfo
@@ -42,13 +51,18 @@ else()
   set(USE_STATIC_MBEDTLS_LIBRARY ON CACHE BOOL "" FORCE)
   FetchContent_MakeAvailable(mbedtls)
 
+  # Frame pointers: the crash handler walks them for the log's stack. Line
+  # numbers for the symbols file (the shipped copy is stripped).
+  add_compile_options(-fno-omit-frame-pointer -g)
   add_library(shared STATIC src/core/update_info.cpp src/core/json.cpp src/installer/linux_steam.cpp)
   target_include_directories(shared PUBLIC src)
   target_link_libraries(shared PUBLIC mbedtls mbedx509 mbedcrypto)
 
-  add_executable(polarity-installer src/installer/installer_linux.cpp)
+  # Linked with symbols; the build script strips the copy it ships and keeps
+  # this one to read the crash addresses in a log.
+  add_executable(polarity-installer src/installer/installer_linux.cpp src/installer/install_log.cpp)
   target_link_libraries(polarity-installer PRIVATE shared)
-  target_link_options(polarity-installer PRIVATE -static -s)
+  target_link_options(polarity-installer PRIVATE -static)
 
   add_executable(installer_tests tests/linux_tests.cpp)
   target_link_libraries(installer_tests PRIVATE shared)

@@ -19,6 +19,8 @@ Neither installer creates desktop shortcuts, menu entries or Steam shortcuts. Th
 | `src/installer/installer_win.cpp` | Windows installer (`polarity-installer.exe`, Task Dialog windows) |
 | `src/installer/installer_linux.cpp` | Linux installer (one static binary; zenity or kdialog windows, the terminal otherwise) |
 | `src/installer/linux_steam.*` | Steam's VDF files, the launch options, the game folder rules (Linux) |
+| `src/installer/install_log.*` | The installer's log, shared by both |
+| `src/installer/version.h` | The installers' version, and the commit the build scripts stamp in |
 | `src/core/update_info.*`, `src/core/json.*`, `src/mod/update_key.h` | Copies of the client's update code and release key |
 | `tests/linux_tests.cpp` | Tests for the Linux pieces, run by the Linux build |
 
@@ -40,6 +42,8 @@ scripts\build-linux.ps1
 
 This writes `dist\polarity-installer-linux`, a static x86_64 binary with no dependencies on the player's system besides Steam. The build fetches mbedTLS 3.6.7 (hash-pinned in `CMakeLists.txt`) and runs `tests/linux_tests.cpp`.
 
+Both scripts stamp the current commit into the build (with `-dirty` when the tree has changes) and keep that build's symbols in `dist\symbols\<commit>\`: the exe with its `.pdb`, and the Linux binary before stripping. Keep the folder of every build you publish. It is how a crash in a player's log turns into file and line.
+
 ## The release key
 
 `src/mod/update_key.h` must hold the same key as the client's `src/mod/update_key.h`, or the installers refuse every release. After the client's key changes (`scripts/release.ps1 -NewKey` there), copy the key array here. To compare this repo's copies with the client's:
@@ -59,6 +63,7 @@ Both installers take:
 | `--site <url>` | Release info other than `https://polaritymod.link/update.json` (tests) |
 | `--game <folder>` | The game folder, at any level down to `Binaries\Win64` |
 | `--yes` | No questions; messages go to the terminal (on Linux this also closes and reopens Steam when needed) |
+| `--test-crash <kind>` | Crashes on purpose to test the crash report: `segv`, `throw` or `terminate` |
 
 Windows only: `--find` prints the game folder Steam has and exits.
 Linux only: `--steam-root <folder>` uses that Steam folder instead of looking for one; `--terminal` asks in the terminal even when windows are available.
@@ -72,3 +77,19 @@ chmod +x polarity-installer-linux && ./polarity-installer-linux
 ```
 
 On the Steam Deck, run it in Desktop Mode.
+
+## Logs
+
+Each run adds to `polarity-installer.log` next to the installer, usually in the player's Downloads folder. When that folder can't be written to, the log goes to `%TEMP%` on Windows and to `~/.local/state/polarity-installer/` on Linux (`/tmp` as a last resort). A log past 1 MB starts over.
+
+A run's log has the installer's version and commit, the system, every download with its size or error, what the installer found in Steam, each file it replaced, the launch options before and after (Linux), what each window asked and which button the player picked, and the exit code. The player's home folder appears as `~`.
+
+When something fails, the error window points to the log. On Windows it has a "Show the installer's log" link that opens Explorer at the file; on Linux it shows the path. A crash adds the exception or signal and the call stack to the log, then opens a window with the log's path.
+
+To read a crash, run this on the log a player sent:
+
+```powershell
+scripts\read-crash.ps1 <polarity-installer.log>
+```
+
+It finds the commit in each run's first line and turns each stack into function, file and line from `dist\symbols\<commit>\`. Windows stacks use the `llvm-symbolizer` that comes with the Visual Studio C++ build tools. Linux stacks use `addr2line` in WSL, or in a Docker container when WSL has none.

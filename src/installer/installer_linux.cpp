@@ -19,7 +19,9 @@
 //    installer asks, closes Steam and opens it again.
 // 5. Says Polarity runs at the game's next start.
 //
-// It makes no desktop files, menu entries or Steam shortcuts.
+// It makes no desktop files, menu entries or Steam shortcuts. It writes a log,
+// polarity-installer.log, next to itself (install_log.h); a crash adds its
+// signal and stack there and tells the player where the file is.
 //
 // Options (mostly for tests):
 //   --site URL         update info other than https://polaritymod.link/update.json
@@ -28,9 +30,13 @@
 //   --yes              no questions: the folder found (or --game); closes and
 //                      reopens Steam when the launch options need it
 //   --terminal         questions in the terminal even when windows are possible
+//   --test-crash KIND  crashes on purpose after opening the log (segv, throw),
+//                      to test the crash report
 
 #include "core/update_info.h"
+#include "installer/install_log.h"
 #include "installer/linux_steam.h"
+#include "installer/version.h"
 #include "mod/update_key.h"
 
 #include <mbedtls/ctr_drbg.h>
@@ -45,7 +51,9 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/stat.h>
+#include <sys/utsname.h>
 #include <sys/wait.h>
+#include <ucontext.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -55,11 +63,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <exception>
 #include <functional>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -85,6 +95,22 @@ std::string Megabytes(uint64_t n)
     char text[32];
     std::snprintf(text, sizeof(text), "%.1f MB", n / (1024.0 * 1024.0));
     return text;
+}
+
+void Log(const std::string& line)
+{
+    log::Write(line);
+}
+
+std::string Quoted(const std::string& s)
+{
+    return "\"" + s + "\"";
+}
+
+// What follows a failure's message in the window that reports it.
+std::string LogNote()
+{
+    return log::Path().empty() ? "" : "\n\nDetails are in the installer's log:\n" + log::Path();
 }
 
 // ----- files and processes ---------------------------------------------------------
@@ -351,9 +377,11 @@ public:
         for (const std::string& f : files) {
             if (IsFile(f) && mbedtls_x509_crt_parse_file(&crt_, f.c_str()) >= 0 && crt_.version != 0) {
                 loaded_ = true;
+                Log("certificates: " + f);
                 break;
             }
         }
+        if (!loaded_) Log("certificates: none of the usual bundles; downloads are checked by signature and hashes only");
     }
     ~Roots() { mbedtls_x509_crt_free(&crt_); }
     bool Loaded() const { return loaded_; }
@@ -457,7 +485,27 @@ private:
 
 // GET `url` (http or https, redirects followed) into `out`, at most `maxBytes`
 // of body. `progress` gets the bytes so far and returns false to stop.
-std::vector<uint8_t> HttpGet(std::string url, size_t maxBytes, const std::function<bool(uint64_t)>& progress = nullptr)
+std::vector<uint8_t> HttpGetOnce(std::string url, size_t maxBytes, const std::function<bool(uint64_t)>& progress);
+
+std::vector<uint8_t> HttpGet(const std::string& url, size_t maxBytes, const std::function<bool(uint64_t)>& progress = nullptr)
+{
+    Log("GET " + url);
+    try {
+        std::vector<uint8_t> body = HttpGetOnce(url, maxBytes, progress);
+        Log("  " + std::to_string(body.size()) + " bytes");
+        return body;
+    }
+    catch (const Failure& f) {
+        Log("  failed: " + f.message);
+        throw;
+    }
+    catch (const Cancelled&) {
+        Log("  cancelled");
+        throw;
+    }
+}
+
+std::vector<uint8_t> HttpGetOnce(std::string url, size_t maxBytes, const std::function<bool(uint64_t)>& progress)
 {
     for (int redirects = 0; redirects < 6; redirects++) {
         Url u;
@@ -500,6 +548,7 @@ std::vector<uint8_t> HttpGet(std::string url, size_t maxBytes, const std::functi
         }
         if (status >= 300 && status < 400 && headers.count("location")) {
             url = sfv::ResolveUrl(url, headers["location"]);
+            Log("  " + std::to_string(status) + " to " + url);
             continue;
         }
         if (status != 200) throw Failure{"The Polarity site answered " + std::to_string(status) + " for " + url + "."};
@@ -558,6 +607,8 @@ sfv::UpdateInfo FetchInfo(const std::string& site)
     if (!sfv::ParseUpdateInfo(std::string_view(reinterpret_cast<const char*>(body.data()), body.size()), &info, &why)) {
         throw Failure{"Cannot read the update info: " + why};
     }
+    Log("update info: Polarity " + info.version + " (" + info.published + "), " + std::to_string(info.files.size()) +
+        " files, signature good");
     return info;
 }
 
@@ -584,7 +635,11 @@ int InstallFiles(const std::string& win64, const sfv::UpdateInfo& info, const st
     uint64_t total = 0;
     for (const sfv::UpdateFile& f : info.files) {
         const std::string target = win64 + "/" + sfv::UpdateFileOnDisk(f.path);
-        if (SameFile(target, f)) continue;
+        if (SameFile(target, f)) {
+            Log(f.path + ": up to date");
+            continue;
+        }
+        Log(f.path + (Exists(target) ? ": differs, to replace" : ": missing, to add"));
         items.push_back({&f, target, target + ".polarity-new", target + ".polarity-old"});
         total += f.size;
     }
@@ -598,6 +653,8 @@ int InstallFiles(const std::string& win64, const sfv::UpdateInfo& info, const st
             const sfv::UpdateFile& f = *it.f;
             const auto data = HttpGet(sfv::ResolveUrl(site, f.url), f.size + 1, [&](uint64_t n) { return progress(done + n, total); });
             if (data.size() != f.size || sfv::Sha256Hex(data.data(), data.size()) != f.sha256) {
+                Log(f.path + ": got " + std::to_string(data.size()) + " bytes, sha256 " +
+                    sfv::Sha256Hex(data.data(), data.size()) + "; expected " + std::to_string(f.size) + ", " + f.sha256);
                 throw Failure{f.path + " from the Polarity site does not match the update info. Nothing was changed."};
             }
             MakeDirs(Dirname(it.target));
@@ -609,6 +666,7 @@ int InstallFiles(const std::string& win64, const sfv::UpdateInfo& info, const st
         }
     }
     catch (...) {
+        Log("removing the downloaded files; the game folder is unchanged");
         cleanup();
         throw;
     }
@@ -622,6 +680,8 @@ int InstallFiles(const std::string& win64, const sfv::UpdateInfo& info, const st
         }
         if (!ok) {
             const std::string why = std::strerror(errno);
+            Log("cannot replace " + it.target + " (" + why + "); putting back the " + std::to_string(swapped.size()) +
+                " files already replaced");
             for (auto p = swapped.rbegin(); p != swapped.rend(); ++p) {
                 unlink((*p)->target.c_str());
                 if ((*p)->hadOld) rename((*p)->old.c_str(), (*p)->target.c_str());
@@ -634,6 +694,7 @@ int InstallFiles(const std::string& win64, const sfv::UpdateInfo& info, const st
     for (const Item& it : items) {
         if (it.hadOld) unlink(it.old.c_str());
     }
+    Log("installed " + std::to_string(items.size()) + " files into " + win64);
     return static_cast<int>(items.size());
 }
 
@@ -681,11 +742,15 @@ std::optional<std::string> FindGame(const std::vector<std::string>& libs)
 {
     for (const std::string& lib : libs) {
         std::string folder = "StreetFighterV";
-        if (const auto acf = ReadFile(lib + "/steamapps/appmanifest_" + kAppId + ".acf", 1024 * 1024)) {
+        const auto acf = ReadFile(lib + "/steamapps/appmanifest_" + kAppId + ".acf", 1024 * 1024);
+        if (acf) {
             const std::string dir = InstallDir(*acf);
             if (!dir.empty()) folder = dir;
         }
-        if (auto win64 = GameWin64(lib + "/steamapps/common/" + folder)) return win64;
+        auto win64 = GameWin64(lib + "/steamapps/common/" + folder);
+        Log("library " + lib + ": " + (acf ? "lists the game" : "doesn't list the game") + ", " +
+            (win64 ? "StreetFighterV.exe found" : "no StreetFighterV.exe in steamapps/common/" + folder));
+        if (win64) return win64;
     }
     return std::nullopt;
 }
@@ -710,6 +775,7 @@ std::vector<std::string> AccountsNeedingOptions(const std::vector<std::string>& 
         const auto text = ReadFile(p);
         const auto opts = text ? GetLaunchOptions(*text) : std::nullopt;
         if (!opts) {
+            Log(p + (text ? ": launch options unreadable" : ": cannot read the file"));
             out.push_back(p);
             continue;
         }
@@ -717,7 +783,9 @@ std::vector<std::string> AccountsNeedingOptions(const std::vector<std::string>& 
         std::string trimmed = *opts;
         trimmed.erase(0, trimmed.find_first_not_of(" \t\r\n"));
         trimmed.erase(trimmed.find_last_not_of(" \t\r\n") + 1);
-        if (WithOverride(*opts) != trimmed) out.push_back(p);
+        const bool loads = WithOverride(*opts) == trimmed;
+        Log(p + ": launch options " + Quoted(*opts) + (loads ? ", load Polarity" : ", need the override"));
+        if (!loads) out.push_back(p);
     }
     return out;
 }
@@ -738,10 +806,14 @@ void CloseSteam(const std::vector<std::string>& roots)
     std::vector<std::string> cmd = SteamCommand(roots);
     if (cmd.empty()) throw Failure{"The steam command was not found. Close Steam yourself and run the installer again."};
     cmd.push_back("-shutdown");
+    std::string line;
+    for (const std::string& a : cmd) line += (line.empty() ? "" : " ") + a;
+    Log("closing Steam: " + line);
     RunDetached(cmd);
     for (int i = 0; i < 90; i++) {
         sleep(1);
         if (!SteamRunning()) {
+            Log("Steam closed after " + std::to_string(i + 1) + " s");
             sleep(2); // its last writes
             return;
         }
@@ -752,6 +824,7 @@ void CloseSteam(const std::vector<std::string>& roots)
 void OpenSteam(const std::vector<std::string>& roots)
 {
     const std::vector<std::string> cmd = SteamCommand(roots);
+    Log(cmd.empty() ? "cannot reopen Steam: no steam command" : "reopening Steam: " + cmd.front());
     if (!cmd.empty()) RunDetached(cmd);
 }
 
@@ -763,8 +836,9 @@ std::vector<std::string> WriteLaunchOptions(const std::vector<std::string>& path
     for (const std::string& p : paths) {
         const auto text = ReadFile(p);
         const auto opts = text ? GetLaunchOptions(*text) : std::nullopt;
-        std::string updated;
-        if (!opts || !SetLaunchOptions(*text, WithOverride(*opts), &updated, nullptr)) {
+        std::string updated, why;
+        if (!opts || !SetLaunchOptions(*text, WithOverride(*opts), &updated, &why)) {
+            Log(p + ": cannot set the launch options (" + (!text ? "cannot read the file" : !opts ? "unreadable" : why) + ")");
             failed.push_back(p);
             continue;
         }
@@ -772,11 +846,17 @@ std::vector<std::string> WriteLaunchOptions(const std::vector<std::string>& path
         struct stat st{};
         const mode_t mode = stat(p.c_str(), &st) == 0 ? (st.st_mode & 07777) : 0644;
         const std::string tmp = Dirname(p) + "/.localconfig.polarity-new";
-        if (!WriteFile(p + ".before-polarity", text->data(), text->size(), mode) ||
-            !WriteFile(tmp, updated.data(), updated.size(), mode) || rename(tmp.c_str(), p.c_str()) != 0) {
+        const char* step = nullptr;
+        if (!WriteFile(p + ".before-polarity", text->data(), text->size(), mode)) step = "writing the backup";
+        else if (!WriteFile(tmp, updated.data(), updated.size(), mode)) step = "writing the new file";
+        else if (rename(tmp.c_str(), p.c_str()) != 0) step = "replacing the file";
+        if (step) {
+            Log(p + ": failed " + step + " (" + std::strerror(errno) + ")");
             unlink(tmp.c_str());
             failed.push_back(p);
+            continue;
         }
+        Log(p + ": launch options set to " + Quoted(WithOverride(*opts)) + ", backup in localconfig.vdf.before-polarity");
     }
     return failed;
 }
@@ -1013,15 +1093,67 @@ struct Options {
     std::vector<std::string> steamRoots;
     bool yes = false;
     bool terminal = false;
+    std::string testCrash;
 };
 
-std::unique_ptr<Ui> MakeUi(const Options& o)
+// Another Ui with what it shows and what the player picks in the log.
+class LoggedUi : public Ui {
+public:
+    explicit LoggedUi(std::unique_ptr<Ui> inner) : inner_(std::move(inner)) { yes = inner_->yes; }
+
+    void Tell(const std::string& heading, const std::string& text, const char* kind) override
+    {
+        Log(std::string("shown (") + kind + "): " + heading + " / " + log::OneLine(text));
+        inner_->Tell(heading, text, kind);
+    }
+
+    int Choose(const std::string& heading, const std::string& text, const std::vector<std::string>& buttons) override
+    {
+        Log("asked: " + heading + " / " + log::OneLine(text));
+        const int pick = inner_->Choose(heading, text, buttons);
+        Log("  answer: " + (pick >= 0 && pick < static_cast<int>(buttons.size()) ? buttons[pick] : std::string("Cancel")));
+        return pick;
+    }
+
+    std::optional<std::string> PickFolder(const std::string& title, const std::string& start) override
+    {
+        auto picked = inner_->PickFolder(title, start);
+        Log(picked ? "folder picked: " + *picked : std::string("folder picker cancelled"));
+        return picked;
+    }
+
+    void ProgressStart(const std::string& heading) override { inner_->ProgressStart(heading); }
+
+    bool Progress(double fraction, const std::string& text) override
+    {
+        const bool go = inner_->Progress(fraction, text);
+        if (!go) Log("progress window closed: cancelled");
+        return go;
+    }
+
+    void ProgressEnd() override { inner_->ProgressEnd(); }
+
+private:
+    std::unique_ptr<Ui> inner_;
+};
+
+// Which windows to use: "zenity", "kdialog" or "terminal".
+std::string UiKind(const Options& o)
 {
     if (!o.yes && !o.terminal && (std::getenv("DISPLAY") || std::getenv("WAYLAND_DISPLAY"))) {
-        if (!Which("zenity").empty()) return std::make_unique<ZenityUi>();
-        if (!Which("kdialog").empty()) return std::make_unique<KdialogUi>();
+        if (!Which("zenity").empty()) return "zenity";
+        if (!Which("kdialog").empty()) return "kdialog";
     }
-    return std::make_unique<TerminalUi>(o.yes);
+    return "terminal";
+}
+
+std::unique_ptr<Ui> MakeUi(const Options& o, const std::string& kind)
+{
+    std::unique_ptr<Ui> ui;
+    if (kind == "zenity") ui = std::make_unique<ZenityUi>();
+    else if (kind == "kdialog") ui = std::make_unique<KdialogUi>();
+    else ui = std::make_unique<TerminalUi>(o.yes);
+    return std::make_unique<LoggedUi>(std::move(ui));
 }
 
 sfv::UpdateInfo GetInfo(Ui& ui, const std::string& site)
@@ -1117,12 +1249,14 @@ enum class LaunchOptions { Set, Had, Left };
 LaunchOptions SetOptions(Ui& ui, const std::vector<std::string>& roots)
 {
     const std::vector<std::string> paths = LocalConfigs(roots);
+    Log("Steam accounts with a localconfig.vdf: " + std::to_string(paths.size()));
     if (paths.empty()) return LaunchOptions::Left;
     // A running Steam holds the launch options in memory: what its file says
     // may be older (an edit in Properties reaches it when Steam closes), and
     // Steam writes over the file then. So they are read and set only with
     // Steam closed.
     const bool wasRunning = SteamRunning();
+    Log(std::string("Steam is ") + (wasRunning ? "running" : "closed"));
     if (wasRunning) {
         if (ui.Choose("Steam needs to close for a moment",
                       "Polarity loads through Street Fighter V's launch options, which can only be checked and changed "
@@ -1150,6 +1284,327 @@ void Usage()
                  "  --terminal         questions in the terminal\n";
 }
 
+// ----- the log and crashes -------------------------------------------------------------
+
+// The crash window, made at the start: a signal handler cannot build it.
+struct CrashWindow {
+    std::vector<std::string> args;
+    std::vector<char*> argv;
+    std::string terminal; // without a window: printed on stderr
+} g_crashWindow;
+
+void PrepareCrashWindow(const std::string& uiKind)
+{
+    const std::string& path = log::Path();
+    const std::string heading = "Polarity Installer stopped unexpectedly";
+    const std::string text = path.empty() ? "It couldn't write a log."
+                                          : "Its log is at\n" + path + "\n\nSend that file to the Polarity team.";
+    g_crashWindow.terminal = "\n" + heading + "\n" + text + "\n";
+    const std::string program = uiKind == "terminal" ? "" : Which(uiKind);
+    if (program.empty()) return;
+    if (uiKind == "zenity") {
+        g_crashWindow.args = {program, std::string("--title=") + kTitle, "--width=460", "--error",
+                              "--text=<b>" + Markup(heading) + "</b>\n\n" + Markup(text)};
+    }
+    else {
+        g_crashWindow.args = {program, std::string("--title=") + kTitle, "--error", heading + "\n\n" + text};
+    }
+    g_crashWindow.argv = Argv(g_crashWindow.args);
+}
+
+void RawText(const char* s)
+{
+    log::WriteRaw(s, std::strlen(s));
+}
+
+void RawNumber(uintptr_t v, int base)
+{
+    char text[24];
+    char* p = text + sizeof(text);
+    *--p = '\0';
+    do {
+        *--p = "0123456789abcdef"[v % base];
+        v /= base;
+    } while (v);
+    if (base == 16) {
+        *--p = 'x';
+        *--p = '0';
+    }
+    RawText(p);
+}
+
+const char* SignalName(int sig)
+{
+    switch (sig) {
+    case SIGSEGV: return "SIGSEGV";
+    case SIGBUS: return "SIGBUS";
+    case SIGFPE: return "SIGFPE";
+    case SIGILL: return "SIGILL";
+    case SIGABRT: return "SIGABRT";
+    case SIGINT: return "SIGINT";
+    case SIGTERM: return "SIGTERM";
+    case SIGHUP: return "SIGHUP";
+    default: return "?";
+    }
+}
+
+// The linker's marks: the ELF header as loaded, the program's code.
+extern "C" const char __ehdr_start[];
+extern "C" const char __executable_start[];
+extern "C" const char etext[];
+
+// What to take off a code address to get the one in the symbols file: the
+// load address when the binary is position-independent (ET_DYN), nothing
+// when it is linked to a fixed address (ET_EXEC; -static does that even
+// from -fPIE code). Set at the start.
+uintptr_t g_slide = 0;
+
+void FindSlide()
+{
+    uint16_t type = 0;
+    std::memcpy(&type, __ehdr_start + 16, sizeof(type));
+    g_slide = type == 3 ? reinterpret_cast<uintptr_t>(__ehdr_start) : 0;
+}
+
+bool InCode(uintptr_t address)
+{
+    return address >= reinterpret_cast<uintptr_t>(__executable_start) && address < reinterpret_cast<uintptr_t>(etext);
+}
+
+// The calls on the stack, through the frame pointers from `bp`, while they
+// are in the program's code (libc's own functions keep no frame pointer).
+// Each is its return address less one: an address inside the call, which
+// addr2line gives the call's line for.
+void RawStack(uintptr_t bp, uintptr_t sp)
+{
+    for (int i = 0; i < 32 && bp >= sp && bp - sp < (8u << 20) && (bp & 7) == 0; i++) {
+        const auto* frame = reinterpret_cast<const uintptr_t*>(bp);
+        if (!InCode(frame[1])) break;
+        RawText(" ");
+        RawNumber(frame[1] - 1 - g_slide, 16);
+        if (frame[0] <= bp) break;
+        bp = frame[0];
+    }
+}
+
+volatile sig_atomic_t g_stackWritten = 0;
+
+// Async-signal-safe throughout: raw writes, fork and execve only.
+void OnCrash(int sig, siginfo_t* info, void* context)
+{
+    RawText("crash: signal ");
+    RawNumber(static_cast<uintptr_t>(sig), 10);
+    RawText(" (");
+    RawText(SignalName(sig));
+    RawText(")");
+    if (sig != SIGABRT) {
+        RawText(", address ");
+        RawNumber(reinterpret_cast<uintptr_t>(info->si_addr), 16);
+    }
+    RawText("\n");
+#if defined(__x86_64__)
+    // The stack as addresses in the symbols file (addr2line -f -C -e
+    // polarity-installer-linux-<commit>.debug <addresses>). An abort after
+    // OnTerminate has its stack already.
+    if (!g_stackWritten) {
+        const auto* uc = static_cast<const ucontext_t*>(context);
+        RawText("  stack: ");
+        RawNumber(static_cast<uintptr_t>(uc->uc_mcontext.gregs[REG_RIP]) - g_slide, 16);
+        RawStack(static_cast<uintptr_t>(uc->uc_mcontext.gregs[REG_RBP]), static_cast<uintptr_t>(uc->uc_mcontext.gregs[REG_RSP]));
+        RawText("\n");
+    }
+#else
+    (void)context;
+#endif
+    if (!g_crashWindow.argv.empty()) {
+        const pid_t pid = fork();
+        if (pid == 0) {
+            execve(g_crashWindow.argv[0], g_crashWindow.argv.data(), environ);
+            _exit(127);
+        }
+        int status;
+        if (pid > 0) waitpid(pid, &status, 0);
+    }
+    else {
+        (void)!write(2, g_crashWindow.terminal.data(), g_crashWindow.terminal.size());
+    }
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+// Ctrl+C, a closed terminal, a kill: noted, then the usual end.
+void OnStop(int sig)
+{
+    RawText("stopped by signal ");
+    RawNumber(static_cast<uintptr_t>(sig), 10);
+    RawText(" (");
+    RawText(SignalName(sig));
+    RawText(")\n");
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+void OnTerminate()
+{
+    std::string what = "std::terminate without an exception";
+    if (const std::exception_ptr e = std::current_exception()) {
+        try {
+            std::rethrow_exception(e);
+        }
+        catch (const std::exception& x) {
+            what = std::string("uncaught exception: ") + x.what();
+        }
+        catch (...) {
+            what = "uncaught exception of an unknown type";
+        }
+    }
+    Log(what);
+    const auto here = reinterpret_cast<uintptr_t>(__builtin_frame_address(0));
+    RawText("  stack:");
+    RawStack(here, here);
+    RawText("\n");
+    g_stackWritten = 1;
+    std::abort(); // the SIGABRT handler shows the window
+}
+
+void InstallCrashHandlers()
+{
+    static char altStack[64 * 1024];
+    stack_t ss{};
+    ss.ss_sp = altStack;
+    ss.ss_size = sizeof(altStack);
+    sigaltstack(&ss, nullptr);
+    struct sigaction sa{};
+    sa.sa_sigaction = OnCrash;
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESETHAND;
+    sigemptyset(&sa.sa_mask);
+    for (int sig : {SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGABRT}) sigaction(sig, &sa, nullptr);
+    struct sigaction stop{};
+    stop.sa_handler = OnStop;
+    stop.sa_flags = SA_RESETHAND;
+    sigemptyset(&stop.sa_mask);
+    for (int sig : {SIGINT, SIGTERM, SIGHUP}) sigaction(sig, &stop, nullptr);
+    std::set_terminate(OnTerminate);
+}
+
+// polarity-installer.log next to the installer, else in the player's state
+// folder, else /tmp.
+void OpenLog()
+{
+    const char* home = std::getenv("HOME");
+    if (home && *home) log::SetHome(home);
+    if (log::Open({Dirname(RealPath("/proc/self/exe"))})) return;
+    std::string state;
+    if (const char* xdg = std::getenv("XDG_STATE_HOME"); xdg && *xdg == '/') state = xdg;
+    else if (home && *home) state = std::string(home) + "/.local/state";
+    if (!state.empty()) {
+        state += "/polarity-installer";
+        MakeDirs(state);
+    }
+    log::Open({state, "/tmp"});
+}
+
+std::string OsName()
+{
+    for (const char* f : {"/etc/os-release", "/usr/lib/os-release"}) {
+        const auto text = ReadFile(f, 64 * 1024);
+        if (!text) continue;
+        const size_t at = text->find("PRETTY_NAME=");
+        if (at == std::string::npos) continue;
+        std::string v = text->substr(at + 12, text->find('\n', at) - at - 12);
+        if (v.size() >= 2 && (v.front() == '"' || v.front() == '\'')) v = v.substr(1, v.size() - 2);
+        return v;
+    }
+    return "unknown";
+}
+
+void LogStart(int argc, char** argv, const std::string& uiKind)
+{
+    char when[64] = "?";
+    const std::time_t now = std::time(nullptr);
+    tm local{};
+    if (localtime_r(&now, &local)) std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S %z", &local);
+    log::WriteRaw("\n", 1);
+    Log("=== Polarity Installer " POLARITY_INSTALLER_VERSION " (commit " POLARITY_INSTALLER_COMMIT "), Linux, " +
+        std::string(when));
+    std::string args;
+    for (int i = 1; i < argc; i++) args += std::string(" ") + argv[i];
+    Log("command:" + (args.empty() ? std::string(" (none)") : args));
+    utsname u{};
+    uname(&u);
+    auto env = [](const char* name) {
+        const char* v = std::getenv(name);
+        return std::string(v && *v ? v : "-");
+    };
+    Log("system: " + OsName() + ", kernel " + u.release + " " + u.machine + ", desktop " + env("XDG_CURRENT_DESKTOP") +
+        ", session " + env("XDG_SESSION_TYPE") + ", windows: " + uiKind);
+}
+
+// A deliberate crash, to test the report (--test-crash).
+[[gnu::noinline]] void TestCrash(const std::string& kind)
+{
+    Log("crashing on purpose: " + kind);
+    if (kind == "segv") {
+        volatile uintptr_t address = 8;
+        *reinterpret_cast<volatile int*>(address) = 1;
+    }
+    else if (kind == "throw") {
+        throw std::runtime_error("a test exception");
+    }
+    else if (kind == "terminate") {
+        std::terminate();
+    }
+}
+
+int Run(const Options& o, Ui& ui)
+{
+    sfv::UpdateInfo info;
+    int changed = 0;
+    LaunchOptions options = LaunchOptions::Left;
+    try {
+        if (!o.testCrash.empty()) TestCrash(o.testCrash);
+        info = GetInfo(ui, o.site);
+        const std::vector<std::string> roots = SteamRoots(o.steamRoots);
+        std::string list;
+        for (const std::string& r : roots) list += " " + r;
+        Log("Steam folders:" + (list.empty() ? std::string(" none found") : list));
+        const std::string win64 = ChooseGame(ui, o, info, SteamLibraries(roots));
+        Log("game folder: " + win64);
+        WaitForGameClosed(ui);
+        changed = Install(ui, o.site, win64, info);
+        options = SetOptions(ui, roots);
+    }
+    catch (const Cancelled& c) {
+        Log(c.message.empty() ? "cancelled" : "stopped: " + c.message);
+        if (!c.message.empty()) ui.Tell("Polarity couldn't be installed", c.message + LogNote(), "error");
+        return 1;
+    }
+    catch (const Failure& f) {
+        Log("failed: " + f.message);
+        ui.Tell("Polarity couldn't be installed", f.message + LogNote(), "error");
+        return 1;
+    }
+    catch (const std::exception& e) {
+        Log(std::string("unexpected error: ") + e.what());
+        ui.Tell("Polarity couldn't be installed", std::string("Something unexpected went wrong (") + e.what() + ")." + LogNote(),
+                "error");
+        return 1;
+    }
+    Log("result: " + std::to_string(changed) + " files changed, launch options " +
+        (options == LaunchOptions::Set ? "set" : options == LaunchOptions::Had ? "already set" : "left to the player"));
+    const bool fresh = changed > 0 || options == LaunchOptions::Set;
+    const std::string heading = fresh ? "Polarity is installed" : "Polarity " + info.version + " is already installed";
+    std::string text = fresh ? "Polarity " + info.version + " will run the next time you start Street Fighter V."
+                             : "It runs whenever you start Street Fighter V.";
+    if (options == LaunchOptions::Left) {
+        text += std::string("\n\nOne step is left: in Steam, open Street Fighter V's Properties and set its launch "
+                            "options to\n") +
+                kLaunchHint;
+    }
+    ui.Tell(heading, text, "info");
+    return 0;
+}
+
 int Main(int argc, char** argv)
 {
     Options o;
@@ -1167,6 +1622,7 @@ int Main(int argc, char** argv)
         else if (a == "--steam-root") o.steamRoots.push_back(next());
         else if (a == "--yes") o.yes = true;
         else if (a == "--terminal") o.terminal = true;
+        else if (a == "--test-crash") o.testCrash = next();
         else if (a == "--help" || a == "-h") {
             Usage();
             return 0;
@@ -1177,41 +1633,21 @@ int Main(int argc, char** argv)
         }
     }
     signal(SIGPIPE, SIG_IGN);
+    OpenLog();
+    const std::string uiKind = UiKind(o);
+    LogStart(argc, argv, uiKind);
+    PrepareCrashWindow(uiKind);
+    FindSlide();
+    InstallCrashHandlers();
+    std::unique_ptr<Ui> ui = MakeUi(o, uiKind);
     if (psa_crypto_init() != PSA_SUCCESS) {
-        std::cerr << "Cannot start the crypto library.\n";
+        Log("failed: psa_crypto_init");
+        ui->Tell("Polarity couldn't be installed", "Cannot start the crypto library." + LogNote(), "error");
         return 1;
     }
-    std::unique_ptr<Ui> ui = MakeUi(o);
-    sfv::UpdateInfo info;
-    int changed = 0;
-    LaunchOptions options = LaunchOptions::Left;
-    try {
-        info = GetInfo(*ui, o.site);
-        const std::vector<std::string> roots = SteamRoots(o.steamRoots);
-        const std::string win64 = ChooseGame(*ui, o, info, SteamLibraries(roots));
-        WaitForGameClosed(*ui);
-        changed = Install(*ui, o.site, win64, info);
-        options = SetOptions(*ui, roots);
-    }
-    catch (const Cancelled& c) {
-        if (!c.message.empty()) ui->Tell("Polarity couldn't be installed", c.message, "error");
-        return 1;
-    }
-    catch (const Failure& f) {
-        ui->Tell("Polarity couldn't be installed", f.message, "error");
-        return 1;
-    }
-    const bool fresh = changed > 0 || options == LaunchOptions::Set;
-    const std::string heading = fresh ? "Polarity is installed" : "Polarity " + info.version + " is already installed";
-    std::string text = fresh ? "Polarity " + info.version + " will run the next time you start Street Fighter V."
-                             : "It runs whenever you start Street Fighter V.";
-    if (options == LaunchOptions::Left) {
-        text += std::string("\n\nOne step is left: in Steam, open Street Fighter V's Properties and set its launch "
-                            "options to\n") +
-                kLaunchHint;
-    }
-    ui->Tell(heading, text, "info");
-    return 0;
+    const int code = Run(o, *ui);
+    Log("exit " + std::to_string(code));
+    return code;
 }
 
 } // namespace

@@ -11,7 +11,10 @@
 // 4. Says Polarity runs at the game's next start.
 //
 // It makes no shortcuts, no Start menu entries and no registry entries, and
-// never writes polarity.ini (the mod's defaults are the public setup).
+// never writes polarity.ini (the mod's defaults are the public setup). It
+// writes a log, polarity-installer.log, next to itself (install_log.h); a
+// crash adds its exception and stack there and tells the player where the
+// file is.
 //
 // Options (for tests and the elevated retry):
 //   --site <url>     update info other than https://polaritymod.link/update.json
@@ -19,8 +22,12 @@
 //   --yes            no questions: the folder found (or --game), messages
 //                    on stdout, exit code 0 when installed
 //   --find           prints the game folder Steam has (or nothing) and exits
+//   --test-crash <k> crashes on purpose after opening the log (segv, throw,
+//                    terminate), to test the crash report
 
 #include "core/update_info.h"
+#include "installer/install_log.h"
+#include "installer/version.h"
 #include "mod/update_key.h"
 
 #include <windows.h>
@@ -35,15 +42,21 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <exception>
 #include <functional>
 #include <mutex>
 #include <optional>
 #include <regex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
 
 #pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
+
+namespace instlog = polarity::installer::log;
 
 namespace {
 
@@ -61,6 +74,7 @@ struct Options {
     bool yes = false;
     bool elevated = false;
     bool find = false;
+    std::string testCrash;
 };
 Options g_opt;
 
@@ -103,6 +117,31 @@ void Print(const std::wstring& text)
     const std::string s = Utf8(text) + "\n";
     DWORD written = 0;
     WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), s.data(), static_cast<DWORD>(s.size()), &written, nullptr);
+}
+
+void Log(const std::string& line)
+{
+    instlog::Write(line);
+}
+
+void Log(const std::wstring& line)
+{
+    instlog::Write(Utf8(line));
+}
+
+// What follows a failure's message in the window that reports it.
+// --yes only: a window shows a link to the log instead (Ask), as a long path
+// gets cut short there.
+std::wstring LogNote()
+{
+    return !g_opt.yes || instlog::Path().empty() ? L"" : L"\n\nDetails are in the installer's log:\n" + Wide(instlog::Path());
+}
+
+// Explorer at the log, the file selected.
+void ShowLogFile()
+{
+    const std::wstring args = L"/select,\"" + Wide(instlog::Path()) + L"\"";
+    ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
 }
 
 // ----- files -----------------------------------------------------------------
@@ -189,6 +228,9 @@ std::vector<std::wstring> SteamLibraries()
                                   RegString(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Valve\\Steam", L"InstallPath")}) {
         if (!r.empty()) roots.push_back(Trimmed(r));
     }
+    std::wstring list;
+    for (const std::wstring& r : roots) list += L" " + r;
+    Log(L"Steam folders (registry):" + (list.empty() ? std::wstring(L" none") : list));
     std::vector<std::wstring> libs;
     auto add = [&](const std::wstring& lib) {
         const std::wstring t = Trimmed(lib);
@@ -213,12 +255,16 @@ std::optional<std::wstring> FindGame()
 {
     for (const std::wstring& lib : SteamLibraries()) {
         std::wstring folder = L"StreetFighterV";
-        if (const auto acf = ReadFileText(lib + L"\\steamapps\\appmanifest_" + Wide(kAppId) + L".acf")) {
+        const auto acf = ReadFileText(lib + L"\\steamapps\\appmanifest_" + Wide(kAppId) + L".acf");
+        if (acf) {
             static const std::regex dir(R"re("installdir"\s+"((?:[^"\\]|\\.)*)")re", std::regex::icase);
             std::smatch m;
             if (std::regex_search(*acf, m, dir)) folder = Wide(VdfUnescape(m[1].str()));
         }
-        if (auto win64 = GameWin64(lib + L"\\steamapps\\common\\" + folder)) return win64;
+        auto win64 = GameWin64(lib + L"\\steamapps\\common\\" + folder);
+        Log(L"library " + lib + L": " + (acf ? L"lists the game" : L"doesn't list the game") + L", " +
+            (win64 ? std::wstring(L"StreetFighterV.exe found") : L"no StreetFighterV.exe in steamapps\\common\\" + folder));
+        if (win64) return win64;
     }
     return std::nullopt;
 }
@@ -255,8 +301,21 @@ bool GameRunning()
 
 std::atomic<bool> g_cancel{false};
 
+bool HttpGetOnce(const std::string& url, size_t maxBytes, std::vector<uint8_t>* out, std::wstring* error,
+                 const std::function<void(uint64_t)>& progress);
+
+// HttpGetOnce with the request and its result in the log.
 bool HttpGet(const std::string& url, size_t maxBytes, std::vector<uint8_t>* out, std::wstring* error,
              const std::function<void(uint64_t)>& progress = nullptr)
+{
+    Log("GET " + url);
+    const bool ok = HttpGetOnce(url, maxBytes, out, error, progress);
+    Log(ok ? "  " + std::to_string(out->size()) + " bytes" : "  failed: " + Utf8(*error));
+    return ok;
+}
+
+bool HttpGetOnce(const std::string& url, size_t maxBytes, std::vector<uint8_t>* out, std::wstring* error,
+                 const std::function<void(uint64_t)>& progress)
 {
     const std::wstring wurl = Wide(url);
     URL_COMPONENTS parts{};
@@ -359,6 +418,8 @@ bool FetchInfo(sfv::UpdateInfo* info, std::wstring* error)
             return false;
         }
     }
+    Log("update info: Polarity " + info->version + " (" + info->published + "), " + std::to_string(info->files.size()) +
+        " files, signature good");
     return true;
 }
 
@@ -397,7 +458,11 @@ InstallResult Install(const std::wstring& win64, const sfv::UpdateInfo& info, Pr
     std::vector<Item> items;
     for (const sfv::UpdateFile& f : info.files) {
         const std::wstring target = win64 + L"\\" + Wide(sfv::UpdateFileOnDisk(f.path));
-        if (SameFile(target, f)) continue;
+        if (SameFile(target, f)) {
+            Log(f.path + ": up to date");
+            continue;
+        }
+        Log(f.path + (IsFile(target) ? ": differs, to replace" : ": missing, to add"));
         items.push_back({&f, target, target + L".polarity-new", target + L".polarity-old"});
         progress->total += f.size;
     }
@@ -406,6 +471,7 @@ InstallResult Install(const std::wstring& win64, const sfv::UpdateInfo& info, Pr
         return r;
     }
     auto cleanup = [&] {
+        if (!r.ok) Log(L"failed: " + r.error + L" (the game folder is unchanged)");
         for (const Item& it : items) DeleteFileW(it.fresh.c_str());
     };
     uint64_t before = 0;
@@ -418,6 +484,8 @@ InstallResult Install(const std::wstring& win64, const sfv::UpdateInfo& info, Pr
             return r;
         }
         if (data.size() != f.size || sfv::Sha256Hex(data.data(), data.size()) != f.sha256) {
+            Log(f.path + ": got " + std::to_string(data.size()) + " bytes, sha256 " + sfv::Sha256Hex(data.data(), data.size()) +
+                "; expected " + std::to_string(f.size) + ", " + f.sha256);
             r.error = Wide(f.path) + L" from the Polarity site does not match the update info. Nothing was changed.";
             cleanup();
             return r;
@@ -452,6 +520,7 @@ InstallResult Install(const std::wstring& win64, const sfv::UpdateInfo& info, Pr
             r.accessDenied = err == ERROR_ACCESS_DENIED;
             r.error = L"Cannot replace " + it.target + L" (error " + std::to_wstring(err) +
                       L"). If Street Fighter V is open, close it and try again.";
+            Log("putting back the " + std::to_string(swapped.size()) + " files already replaced");
             for (auto p = swapped.rbegin(); p != swapped.rend(); ++p) {
                 DeleteFileW((*p)->target.c_str());
                 if ((*p)->hadOld) MoveFileExW((*p)->old.c_str(), (*p)->target.c_str(), 0);
@@ -465,6 +534,7 @@ InstallResult Install(const std::wstring& win64, const sfv::UpdateInfo& info, Pr
     for (const Item& it : items) {
         if (it.hadOld) DeleteFileW(it.old.c_str());
     }
+    Log(L"installed " + std::to_wstring(items.size()) + L" files into " + win64);
     r.ok = true;
     return r;
 }
@@ -476,6 +546,16 @@ struct Button {
     const wchar_t* text;
 };
 
+HRESULT CALLBACK AskCallback(HWND, UINT msg, WPARAM, LPARAM, LONG_PTR)
+{
+    if (msg == TDN_HYPERLINK_CLICKED) {
+        Log("log link clicked");
+        ShowLogFile();
+    }
+    return S_OK;
+}
+
+// An error window also links to the log.
 int Ask(const std::wstring& heading, const std::wstring& text, const std::vector<Button>& buttons,
         PCWSTR icon = nullptr, TASKDIALOG_COMMON_BUTTON_FLAGS common = TDCBF_CANCEL_BUTTON)
 {
@@ -492,14 +572,28 @@ int Ask(const std::wstring& heading, const std::wstring& text, const std::vector
     c.pButtons = b.empty() ? nullptr : b.data();
     c.nDefaultButton = buttons.empty() ? 0 : buttons.front().id;
     c.dwCommonButtons = common;
+    if (icon == TD_ERROR_ICON && !instlog::Path().empty()) {
+        c.dwFlags |= TDF_ENABLE_HYPERLINKS;
+        c.pszFooter = L"<a href=\"log\">Show the installer's log</a>";
+        c.pfCallback = AskCallback;
+    }
     int pressed = IDCANCEL;
+    Log(std::string(buttons.empty() ? "shown: " : "asked: ") + Utf8(heading) + " / " + instlog::OneLine(Utf8(text)));
     TaskDialogIndirect(&c, &pressed, nullptr, nullptr);
+    if (!buttons.empty()) {
+        std::wstring answer = pressed == IDCANCEL ? L"Cancel" : L"?";
+        for (const Button& x : buttons) {
+            if (x.id == pressed) answer = x.text;
+        }
+        Log(L"  answer: " + answer);
+    }
     return pressed;
 }
 
 void Tell(const std::wstring& heading, const std::wstring& text, PCWSTR icon = nullptr)
 {
     if (g_opt.yes) {
+        Log("shown: " + Utf8(heading) + " / " + instlog::OneLine(Utf8(text)));
         Print(heading + L"\n" + text);
         return;
     }
@@ -597,6 +691,7 @@ std::optional<std::wstring> PickFolder(const std::wstring& start)
         }
     }
     dialog->Release();
+    Log(out ? L"folder picked: " + *out : std::wstring(L"folder picker cancelled"));
     return out;
 }
 
@@ -658,7 +753,10 @@ bool RelaunchElevated(const std::wstring& win64)
     e.lpFile = exe;
     e.lpParameters = args.c_str();
     e.nShow = SW_SHOWNORMAL;
-    return ShellExecuteExW(&e) != FALSE;
+    const bool ok = ShellExecuteExW(&e) != FALSE;
+    Log(ok ? std::string("started the installer again as administrator")
+           : "cannot start the installer as administrator (error " + std::to_string(GetLastError()) + ")");
+    return ok;
 }
 
 void ParseArgs()
@@ -672,19 +770,195 @@ void ParseArgs()
         else if (a == L"--yes") g_opt.yes = true;
         else if (a == L"--elevated") g_opt.elevated = true;
         else if (a == L"--find") g_opt.find = true;
+        else if (a == L"--test-crash" && i + 1 < argc) g_opt.testCrash = Utf8(argv[++i]);
     }
     LocalFree(argv);
 }
 
+// ----- the log and crashes -----------------------------------------------------------
+
+// The crash window's text, made at the start: a crash handler should not
+// have to build it.
+std::wstring g_crashText;
+
+void PrepareCrashText()
+{
+    g_crashText = instlog::Path().empty() ? L"It couldn't write a log."
+                                      : L"Its log is at\n" + Wide(instlog::Path()) + L"\n\nSend that file to the Polarity team.";
+}
+
+void ShowCrashWindow()
+{
+    if (g_opt.yes) return;
+    const std::wstring text = L"Polarity Installer stopped unexpectedly\n\n" + g_crashText;
+    MessageBoxW(nullptr, text.c_str(), kTitle, MB_OK | MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND);
+}
+
+void RawText(const char* s)
+{
+    instlog::WriteRaw(s, std::strlen(s));
+}
+
+// "module+0xoffset" for a code address.
+void RawWhere(DWORD64 address)
+{
+    char line[MAX_PATH + 48];
+    HMODULE module = nullptr;
+    char name[MAX_PATH] = "?";
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCSTR>(address), &module) &&
+        GetModuleFileNameA(module, name, MAX_PATH)) {
+        const char* slash = std::strrchr(name, '\\');
+        std::snprintf(line, sizeof(line), "%s+0x%llx", slash ? slash + 1 : name,
+                      static_cast<unsigned long long>(address - reinterpret_cast<DWORD64>(module)));
+    }
+    else {
+        std::snprintf(line, sizeof(line), "0x%llx", static_cast<unsigned long long>(address));
+    }
+    RawText(line);
+}
+
+// The stack from `context` up, through the x64 unwind data (offsets read
+// against the build's .pdb). Past the first, each is a return address less
+// one: inside the call, so a symbolizer gives the call's line.
+void RawStack(CONTEXT context)
+{
+    RawText("  stack:");
+    for (int i = 0; i < 32 && context.Rip != 0; i++) {
+        RawText(" ");
+        RawWhere(i == 0 ? context.Rip : context.Rip - 1);
+        DWORD64 imageBase = 0;
+        PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(context.Rip, &imageBase, nullptr);
+        if (fn) {
+            PVOID handlerData = nullptr;
+            DWORD64 establisher = 0;
+            RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, fn, &context, &handlerData, &establisher, nullptr);
+        }
+        else {
+            // A leaf function: the return address is on top of the stack.
+            context.Rip = *reinterpret_cast<const DWORD64*>(context.Rsp);
+            context.Rsp += 8;
+        }
+    }
+    RawText("\r\n");
+}
+
+LONG WINAPI OnCrash(EXCEPTION_POINTERS* ep)
+{
+    const EXCEPTION_RECORD* r = ep->ExceptionRecord;
+    char line[160];
+    std::snprintf(line, sizeof(line), "crash: exception 0x%08lX at ", static_cast<unsigned long>(r->ExceptionCode));
+    RawText(line);
+    RawWhere(reinterpret_cast<DWORD64>(r->ExceptionAddress));
+    if (r->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && r->NumberParameters >= 2) {
+        std::snprintf(line, sizeof(line), ", %s 0x%llx",
+                      r->ExceptionInformation[0] == 0 ? "reading" : r->ExceptionInformation[0] == 1 ? "writing" : "running",
+                      static_cast<unsigned long long>(r->ExceptionInformation[1]));
+        RawText(line);
+    }
+    RawText("\r\n");
+    RawStack(*ep->ContextRecord);
+    ShowCrashWindow();
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
+void OnTerminate()
+{
+    std::string what = "std::terminate without an exception";
+    if (const std::exception_ptr e = std::current_exception()) {
+        try {
+            std::rethrow_exception(e);
+        }
+        catch (const std::exception& x) {
+            what = std::string("uncaught exception: ") + x.what();
+        }
+        catch (...) {
+            what = "uncaught exception of an unknown type";
+        }
+    }
+    Log(what);
+    CONTEXT context{};
+    RtlCaptureContext(&context);
+    RawStack(context);
+    ShowCrashWindow();
+    _exit(3);
+}
+
+void InstallCrashHandlers()
+{
+    SetUnhandledExceptionFilter(OnCrash);
+    std::set_terminate(OnTerminate);
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+}
+
+// polarity-installer.log next to the installer, else in the temp folder.
+void OpenLog()
+{
+    wchar_t profile[MAX_PATH] = {};
+    if (GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH)) instlog::SetHome(Utf8(profile));
+    wchar_t exe[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    std::wstring dir = exe;
+    dir = dir.substr(0, dir.find_last_of(L'\\'));
+    wchar_t temp[MAX_PATH + 1] = {};
+    GetTempPathW(MAX_PATH + 1, temp);
+    instlog::Open({Utf8(dir), Utf8(temp)});
+}
+
+void LogStart()
+{
+    SYSTEMTIME t;
+    GetLocalTime(&t);
+    char when[32];
+    std::snprintf(when, sizeof(when), "%04u-%02u-%02u %02u:%02u:%02u", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+    instlog::WriteRaw("\r\n", 2);
+    Log("=== Polarity Installer " POLARITY_INSTALLER_VERSION " (commit " POLARITY_INSTALLER_COMMIT "), Windows, " +
+        std::string(when));
+    const std::wstring command = GetCommandLineW();
+    const size_t args = command[0] == L'"' ? command.find(L'"', 1) + 1 : command.find(L' ');
+    std::wstring rest = args == std::wstring::npos || args >= command.size() ? L"" : command.substr(args);
+    rest.erase(0, rest.find_first_not_of(L' '));
+    Log(L"command: " + (rest.empty() ? std::wstring(L"(none)") : rest));
+    // RtlGetVersion: GetVersionEx reports what the manifest allows.
+    RTL_OSVERSIONINFOW v{};
+    v.dwOSVersionInfoSize = sizeof(v);
+    using RtlGetVersionFn = LONG(WINAPI*)(RTL_OSVERSIONINFOW*);
+    if (auto get = reinterpret_cast<RtlGetVersionFn>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion"))) get(&v);
+    BOOL admin = FALSE;
+    SID_IDENTIFIER_AUTHORITY nt = SECURITY_NT_AUTHORITY;
+    PSID group = nullptr;
+    if (AllocateAndInitializeSid(&nt, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &group)) {
+        CheckTokenMembership(nullptr, group, &admin);
+        FreeSid(group);
+    }
+    Log("system: Windows " + std::to_string(v.dwMajorVersion) + "." + std::to_string(v.dwMinorVersion) + " build " +
+        std::to_string(v.dwBuildNumber) + (admin ? ", as administrator" : ""));
+}
+
+// A deliberate crash, to test the report (--test-crash).
+__declspec(noinline) void TestCrash(const std::string& kind)
+{
+    Log("crashing on purpose: " + kind);
+    if (kind == "segv") {
+        volatile uintptr_t address = 8;
+        *reinterpret_cast<volatile int*>(address) = 1;
+    }
+    else if (kind == "throw") {
+        throw std::runtime_error("a test exception");
+    }
+    else if (kind == "terminate") {
+        std::terminate();
+    }
+}
+
 int Run()
 {
-    ParseArgs();
-    if (g_opt.yes || g_opt.find) AttachConsole(ATTACH_PARENT_PROCESS);
     if (g_opt.find) {
         const auto win64 = FindGame();
         if (win64) Print(*win64);
         return win64 ? 0 : 1;
     }
+    if (!g_opt.testCrash.empty()) TestCrash(g_opt.testCrash);
 
     sfv::UpdateInfo info;
     std::wstring error;
@@ -694,14 +968,17 @@ int Run()
         if (ok) break;
         if (g_cancel) return 1;
         if (g_opt.yes) {
-            Tell(L"Polarity couldn't be installed", error, TD_ERROR_ICON);
+            Tell(L"Polarity couldn't be installed", error + LogNote(), TD_ERROR_ICON);
             return 1;
         }
-        if (Ask(L"Polarity couldn't be downloaded", error, {{kRetry, L"Try again"}}, TD_ERROR_ICON) != kRetry) return 1;
+        if (Ask(L"Polarity couldn't be downloaded", error + LogNote(), {{kRetry, L"Try again"}}, TD_ERROR_ICON) != kRetry) {
+            return 1;
+        }
     }
 
     const auto win64 = ChooseGame(info);
     if (!win64) return 1;
+    Log(L"game folder: " + *win64);
 
     while (GameRunning()) {
         if (g_opt.yes) {
@@ -726,14 +1003,17 @@ int Run()
             Tell(heading, text, TD_INFORMATION_ICON);
             return 0;
         }
-        if (g_cancel) return 1;
+        if (g_cancel) {
+            Log("cancelled");
+            return 1;
+        }
         if (g_opt.yes) {
-            Tell(L"Polarity couldn't be installed", r.error, TD_ERROR_ICON);
+            Tell(L"Polarity couldn't be installed", r.error + LogNote(), TD_ERROR_ICON);
             return 1;
         }
         std::vector<Button> buttons{{kRetry, L"Try again"}};
         if (r.accessDenied && !g_opt.elevated) buttons.insert(buttons.begin(), {kAdmin, L"Install as administrator"});
-        const int pressed = Ask(L"Polarity couldn't be installed", r.error, buttons, TD_ERROR_ICON);
+        const int pressed = Ask(L"Polarity couldn't be installed", r.error + LogNote(), buttons, TD_ERROR_ICON);
         if (pressed == kAdmin) return RelaunchElevated(*win64) ? 0 : 1;
         if (pressed != kRetry) return 1;
     }
@@ -743,11 +1023,28 @@ int Run()
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 {
+    ParseArgs();
+    if (g_opt.yes || g_opt.find) AttachConsole(ATTACH_PARENT_PROCESS);
+    if (!g_opt.find) {
+        OpenLog();
+        LogStart();
+    }
+    PrepareCrashText();
+    InstallCrashHandlers();
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     INITCOMMONCONTROLSEX icc{sizeof(icc), ICC_STANDARD_CLASSES | ICC_PROGRESS_CLASS};
     InitCommonControlsEx(&icc);
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    const int code = Run();
+    int code = 1;
+    try {
+        code = Run();
+    }
+    catch (const std::exception& e) {
+        Log(std::string("unexpected error: ") + e.what());
+        Tell(L"Polarity couldn't be installed",
+             L"Something unexpected went wrong (" + Wide(e.what()) + L")." + LogNote(), TD_ERROR_ICON);
+    }
+    Log("exit " + std::to_string(code));
     CoUninitialize();
     return code;
 }
