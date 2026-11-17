@@ -42,7 +42,13 @@ scripts\build-linux.ps1
 
 This writes `dist\polarity-installer-linux`, a static x86_64 binary with no dependencies on the player's system besides Steam. The build fetches mbedTLS 3.6.7 (hash-pinned in `CMakeLists.txt`) and runs `tests/linux_tests.cpp`.
 
-Both scripts stamp the current commit into the build (with `-dirty` when the tree has changes) and keep that build's symbols in `dist\symbols\<commit>\`: the exe with its `.pdb`, and the Linux binary before stripping. Keep the folder of every build you publish. It is how a crash in a player's log turns into file and line.
+Both scripts stamp the current commit into the build (with `-dirty` when the tree has changes) and keep that build's symbols in `dist\symbols\<commit>\`: the exe with its `.pdb`, and the Linux binary before stripping. It is how a crash in a player's log turns into file and line.
+
+## Releases
+
+GitHub Actions (`.github/workflows/build.yml`) runs both build scripts on every push to main and every pull request. To release, raise `POLARITY_INSTALLER_VERSION` in `src/installer/version.h`, then push a `v<version>` tag. The workflow attests both installers and puts them, with their symbols, in a draft release. Publish the draft and the site's download buttons, which link to the latest release's files, offer it.
+
+To read a crash from a released build, download that release's files into `dist\symbols\<commit>\`, with the commit from the log's first line, and run `scripts\read-crash.ps1` as usual.
 
 ## The release key
 

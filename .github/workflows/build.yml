@@ -1,0 +1,84 @@
+# Builds both installers on every push and pull request, runs the Linux tests,
+# and keeps the binaries and their symbols as artifacts for two weeks. A
+# pushed v<version> tag (POLARITY_INSTALLER_VERSION) also attests them and
+# puts them in a draft GitHub Release, which the site's download buttons
+# link to once it's published.
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build
+        shell: pwsh
+        run: scripts/build-windows.ps1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows
+          path: |
+            dist/polarity-installer.exe
+            dist/symbols/*/polarity-installer.pdb
+          retention-days: 14
+          if-no-files-found: error
+
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build and test
+        shell: pwsh
+        run: scripts/build-linux.ps1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux
+          path: |
+            dist/polarity-installer-linux
+            dist/symbols/*/polarity-installer-linux.debug
+          retention-days: 14
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [windows, linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+
+      - name: Check the tag and gather the files
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/^#define POLARITY_INSTALLER_VERSION "\(.*\)"$/\1/p' src/installer/version.h)
+          if [ "$TAG" != "v$version" ]; then echo "the tag $TAG does not match POLARITY_INSTALLER_VERSION $version"; exit 1; fi
+          mkdir release
+          find artifacts -type f -exec cp {} release/ \;
+          ls -l release
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/*
+
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --generate-notes --title "Polarity installer ${TAG#v}" release/*
