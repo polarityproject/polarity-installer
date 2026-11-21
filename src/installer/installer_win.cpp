@@ -66,7 +66,10 @@ constexpr const char* kAppId = "310950";
 constexpr DWORD kTimeoutMs = 15000;
 constexpr size_t kMaxInfoBytes = 64 * 1024;
 
-enum ButtonId { kInstall = 100, kChoose, kRetry, kAdmin };
+enum ButtonId { kInstall = 100,
+                kChoose,
+                kRetry,
+                kAdmin };
 
 struct Options {
     std::string site = kDefaultSite;
@@ -76,12 +79,12 @@ struct Options {
     bool find = false;
     std::string testCrash;
 };
+
 Options g_opt;
 
 // ----- text ------------------------------------------------------------------
 
-std::wstring Wide(const std::string& s)
-{
+std::wstring Wide(const std::string& s) {
     if (s.empty()) return {};
     const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
     std::wstring w(n, L'\0');
@@ -89,8 +92,7 @@ std::wstring Wide(const std::string& s)
     return w;
 }
 
-std::string Utf8(const std::wstring& w)
-{
+std::string Utf8(const std::wstring& w) {
     if (w.empty()) return {};
     const int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
     std::string s(n, '\0');
@@ -98,68 +100,58 @@ std::string Utf8(const std::wstring& w)
     return s;
 }
 
-std::wstring Lower(std::wstring s)
-{
+std::wstring Lower(std::wstring s) {
     std::transform(s.begin(), s.end(), s.begin(), [](wchar_t c) { return static_cast<wchar_t>(towlower(c)); });
     return s;
 }
 
-std::wstring Megabytes(uint64_t bytes)
-{
+std::wstring Megabytes(uint64_t bytes) {
     wchar_t text[32];
     swprintf(text, 32, L"%.1f MB", bytes / (1024.0 * 1024.0));
     return text;
 }
 
 // --yes: messages to the console the installer was started from.
-void Print(const std::wstring& text)
-{
+void Print(const std::wstring& text) {
     const std::string s = Utf8(text) + "\n";
     DWORD written = 0;
     WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), s.data(), static_cast<DWORD>(s.size()), &written, nullptr);
 }
 
-void Log(const std::string& line)
-{
+void Log(const std::string& line) {
     instlog::Write(line);
 }
 
-void Log(const std::wstring& line)
-{
+void Log(const std::wstring& line) {
     instlog::Write(Utf8(line));
 }
 
 // What follows a failure's message in the window that reports it.
 // --yes only: a window shows a link to the log instead (Ask), as a long path
 // gets cut short there.
-std::wstring LogNote()
-{
+std::wstring LogNote() {
     return !g_opt.yes || instlog::Path().empty() ? L"" : L"\n\nDetails are in the installer's log:\n" + Wide(instlog::Path());
 }
 
 // Explorer at the log, the file selected.
-void ShowLogFile()
-{
+void ShowLogFile() {
     const std::wstring args = L"/select,\"" + Wide(instlog::Path()) + L"\"";
     ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
 }
 
 // ----- files -----------------------------------------------------------------
 
-bool IsFile(const std::wstring& path)
-{
+bool IsFile(const std::wstring& path) {
     const DWORD a = GetFileAttributesW(path.c_str());
     return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
 }
 
-bool IsDir(const std::wstring& path)
-{
+bool IsDir(const std::wstring& path) {
     const DWORD a = GetFileAttributesW(path.c_str());
     return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
 }
 
-std::optional<std::string> ReadFileText(const std::wstring& path, size_t maxBytes = 4 * 1024 * 1024)
-{
+std::optional<std::string> ReadFileText(const std::wstring& path, size_t maxBytes = 4 * 1024 * 1024) {
     FILE* f = _wfopen(path.c_str(), L"rb");
     if (!f) return std::nullopt;
     std::string data;
@@ -170,16 +162,14 @@ std::optional<std::string> ReadFileText(const std::wstring& path, size_t maxByte
     return data;
 }
 
-void MakeDirs(const std::wstring& dir)
-{
+void MakeDirs(const std::wstring& dir) {
     if (dir.empty() || IsDir(dir)) return;
     const size_t slash = dir.find_last_of(L"\\/");
     if (slash != std::wstring::npos && slash > 2) MakeDirs(dir.substr(0, slash));
     CreateDirectoryW(dir.c_str(), nullptr);
 }
 
-std::wstring Trimmed(std::wstring p)
-{
+std::wstring Trimmed(std::wstring p) {
     std::replace(p.begin(), p.end(), L'/', L'\\');
     while (p.size() > 3 && p.back() == L'\\') p.pop_back();
     return p;
@@ -188,8 +178,7 @@ std::wstring Trimmed(std::wstring p)
 // The game's Binaries\Win64 folder for a folder the player picked: the
 // library's StreetFighterV folder, the StreetFighterV inside it, Binaries,
 // or Win64 itself.
-std::optional<std::wstring> GameWin64(const std::wstring& picked)
-{
+std::optional<std::wstring> GameWin64(const std::wstring& picked) {
     const std::wstring p = Trimmed(picked);
     for (const std::wstring& c : {p + L"\\StreetFighterV\\Binaries\\Win64", p + L"\\Binaries\\Win64", p + L"\\Win64", p}) {
         const std::wstring lower = Lower(c);
@@ -201,8 +190,7 @@ std::optional<std::wstring> GameWin64(const std::wstring& picked)
 
 // ----- Steam -----------------------------------------------------------------
 
-std::wstring RegString(HKEY root, const wchar_t* key, const wchar_t* name)
-{
+std::wstring RegString(HKEY root, const wchar_t* key, const wchar_t* name) {
     wchar_t value[MAX_PATH * 2] = {};
     DWORD size = sizeof(value);
     if (RegGetValueW(root, key, name, RRF_RT_REG_SZ, nullptr, value, &size) != ERROR_SUCCESS) return {};
@@ -210,8 +198,7 @@ std::wstring RegString(HKEY root, const wchar_t* key, const wchar_t* name)
 }
 
 // A VDF string's text: \\ -> \, \" -> ".
-std::string VdfUnescape(const std::string& s)
-{
+std::string VdfUnescape(const std::string& s) {
     std::string out;
     for (size_t i = 0; i < s.size(); i++) {
         if (s[i] == '\\' && i + 1 < s.size()) out += s[++i];
@@ -220,8 +207,7 @@ std::string VdfUnescape(const std::string& s)
     return out;
 }
 
-std::vector<std::wstring> SteamLibraries()
-{
+std::vector<std::wstring> SteamLibraries() {
     std::vector<std::wstring> roots;
     for (const std::wstring& r : {RegString(HKEY_CURRENT_USER, L"Software\\Valve\\Steam", L"SteamPath"),
                                   RegString(HKEY_LOCAL_MACHINE, L"SOFTWARE\\WOW6432Node\\Valve\\Steam", L"InstallPath"),
@@ -251,8 +237,7 @@ std::vector<std::wstring> SteamLibraries()
     return libs;
 }
 
-std::optional<std::wstring> FindGame()
-{
+std::optional<std::wstring> FindGame() {
     for (const std::wstring& lib : SteamLibraries()) {
         std::wstring folder = L"StreetFighterV";
         const auto acf = ReadFileText(lib + L"\\steamapps\\appmanifest_" + Wide(kAppId) + L".acf");
@@ -271,8 +256,7 @@ std::optional<std::wstring> FindGame()
 
 // The library's StreetFighterV folder (two levels above Binaries\Win64,
 // then one more), for showing the player.
-std::wstring GameRoot(const std::wstring& win64)
-{
+std::wstring GameRoot(const std::wstring& win64) {
     std::wstring p = win64;
     for (int i = 0; i < 3; i++) {
         const size_t slash = p.find_last_of(L'\\');
@@ -283,8 +267,7 @@ std::wstring GameRoot(const std::wstring& win64)
 }
 
 // Whether a StreetFighterV.exe is running (the launcher or the game).
-bool GameRunning()
-{
+bool GameRunning() {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snap == INVALID_HANDLE_VALUE) return false;
     PROCESSENTRY32W e{};
@@ -306,8 +289,7 @@ bool HttpGetOnce(const std::string& url, size_t maxBytes, std::vector<uint8_t>* 
 
 // HttpGetOnce with the request and its result in the log.
 bool HttpGet(const std::string& url, size_t maxBytes, std::vector<uint8_t>* out, std::wstring* error,
-             const std::function<void(uint64_t)>& progress = nullptr)
-{
+             const std::function<void(uint64_t)>& progress = nullptr) {
     Log("GET " + url);
     const bool ok = HttpGetOnce(url, maxBytes, out, error, progress);
     Log(ok ? "  " + std::to_string(out->size()) + " bytes" : "  failed: " + Utf8(*error));
@@ -315,8 +297,7 @@ bool HttpGet(const std::string& url, size_t maxBytes, std::vector<uint8_t>* out,
 }
 
 bool HttpGetOnce(const std::string& url, size_t maxBytes, std::vector<uint8_t>* out, std::wstring* error,
-                 const std::function<void(uint64_t)>& progress)
-{
+                 const std::function<void(uint64_t)>& progress) {
     const std::wstring wurl = Wide(url);
     URL_COMPONENTS parts{};
     parts.dwStructSize = sizeof(parts);
@@ -346,8 +327,7 @@ bool HttpGetOnce(const std::string& url, size_t maxBytes, std::vector<uint8_t>* 
                                 &status, &size, WINHTTP_NO_HEADER_INDEX);
             if (status != 200) {
                 *error = L"The Polarity site answered " + std::to_wstring(status) + L" for " + wurl + L".";
-            }
-            else {
+            } else {
                 out->clear();
                 ok = true;
                 for (;;) {
@@ -380,13 +360,11 @@ bool HttpGetOnce(const std::string& url, size_t maxBytes, std::vector<uint8_t>* 
                     }
                 }
             }
-        }
-        else {
+        } else {
             *error = L"Cannot reach the Polarity site (error " + std::to_wstring(GetLastError()) +
                      L"). Check your internet connection and try again.";
         }
-    }
-    else {
+    } else {
         *error = L"Cannot open " + wurl + L".";
     }
     if (request) WinHttpCloseHandle(request);
@@ -397,8 +375,7 @@ bool HttpGetOnce(const std::string& url, size_t maxBytes, std::vector<uint8_t>* 
 
 // The site's update info, checked against the release key before anything
 // in it counts.
-bool FetchInfo(sfv::UpdateInfo* info, std::wstring* error)
-{
+bool FetchInfo(sfv::UpdateInfo* info, std::wstring* error) {
     std::vector<uint8_t> body, sig;
     if (!HttpGet(g_opt.site, kMaxInfoBytes, &body, error) || !HttpGet(g_opt.site + ".sig", 4096, &sig, error)) return false;
     const std::vector<uint8_t> signature =
@@ -423,8 +400,7 @@ bool FetchInfo(sfv::UpdateInfo* info, std::wstring* error)
     return true;
 }
 
-bool SameFile(const std::wstring& path, const sfv::UpdateFile& f)
-{
+bool SameFile(const std::wstring& path, const sfv::UpdateFile& f) {
     FILE* in = _wfopen(path.c_str(), L"rb");
     if (!in) return false;
     std::vector<uint8_t> data(static_cast<size_t>(f.size) + 1);
@@ -447,14 +423,15 @@ struct InstallResult {
 
 // Downloads what differs from the game folder, then swaps it in: old files
 // aside first, so a failure puts everything back.
-InstallResult Install(const std::wstring& win64, const sfv::UpdateInfo& info, Progress* progress)
-{
+InstallResult Install(const std::wstring& win64, const sfv::UpdateInfo& info, Progress* progress) {
     InstallResult r;
+
     struct Item {
         const sfv::UpdateFile* file;
         std::wstring target, fresh, old;
         bool hadOld = false;
     };
+
     std::vector<Item> items;
     for (const sfv::UpdateFile& f : info.files) {
         const std::wstring target = win64 + L"\\" + Wide(sfv::UpdateFileOnDisk(f.path));
@@ -546,8 +523,7 @@ struct Button {
     const wchar_t* text;
 };
 
-HRESULT CALLBACK AskCallback(HWND, UINT msg, WPARAM, LPARAM, LONG_PTR)
-{
+HRESULT CALLBACK AskCallback(HWND, UINT msg, WPARAM, LPARAM, LONG_PTR) {
     if (msg == TDN_HYPERLINK_CLICKED) {
         Log("log link clicked");
         ShowLogFile();
@@ -557,8 +533,7 @@ HRESULT CALLBACK AskCallback(HWND, UINT msg, WPARAM, LPARAM, LONG_PTR)
 
 // An error window also links to the log.
 int Ask(const std::wstring& heading, const std::wstring& text, const std::vector<Button>& buttons,
-        PCWSTR icon = nullptr, TASKDIALOG_COMMON_BUTTON_FLAGS common = TDCBF_CANCEL_BUTTON)
-{
+        PCWSTR icon = nullptr, TASKDIALOG_COMMON_BUTTON_FLAGS common = TDCBF_CANCEL_BUTTON) {
     std::vector<TASKDIALOG_BUTTON> b;
     for (const Button& x : buttons) b.push_back({x.id, x.text});
     TASKDIALOGCONFIG c{};
@@ -590,8 +565,7 @@ int Ask(const std::wstring& heading, const std::wstring& text, const std::vector
     return pressed;
 }
 
-void Tell(const std::wstring& heading, const std::wstring& text, PCWSTR icon = nullptr)
-{
+void Tell(const std::wstring& heading, const std::wstring& text, PCWSTR icon = nullptr) {
     if (g_opt.yes) {
         Log("shown: " + Utf8(heading) + " / " + instlog::OneLine(Utf8(text)));
         Print(heading + L"\n" + text);
@@ -606,41 +580,39 @@ struct WorkDialog {
     std::wstring shown;
 };
 
-HRESULT CALLBACK WorkCallback(HWND hwnd, UINT msg, WPARAM wParam, LPARAM, LONG_PTR ref)
-{
+HRESULT CALLBACK WorkCallback(HWND hwnd, UINT msg, WPARAM wParam, LPARAM, LONG_PTR ref) {
     auto* w = reinterpret_cast<WorkDialog*>(ref);
     switch (msg) {
-    case TDN_CREATED:
-        SendMessageW(hwnd, TDM_SET_PROGRESS_BAR_RANGE, 0, MAKELPARAM(0, 1000));
-        SendMessageW(hwnd, TDM_SET_PROGRESS_BAR_MARQUEE, TRUE, 0);
-        break;
-    case TDN_TIMER: {
-        if (w->progress->finished) {
-            SendMessageW(hwnd, TDM_CLICK_BUTTON, IDCANCEL, 0);
+        case TDN_CREATED:
+            SendMessageW(hwnd, TDM_SET_PROGRESS_BAR_RANGE, 0, MAKELPARAM(0, 1000));
+            SendMessageW(hwnd, TDM_SET_PROGRESS_BAR_MARQUEE, TRUE, 0);
+            break;
+        case TDN_TIMER: {
+            if (w->progress->finished) {
+                SendMessageW(hwnd, TDM_CLICK_BUTTON, IDCANCEL, 0);
+                break;
+            }
+            const uint64_t total = w->progress->total, done = w->progress->done;
+            if (total > 0) {
+                SendMessageW(hwnd, TDM_SET_MARQUEE_PROGRESS_BAR, FALSE, 0);
+                SendMessageW(hwnd, TDM_SET_PROGRESS_BAR_POS, static_cast<WPARAM>(done * 1000 / total), 0);
+                const std::wstring text = Megabytes(done) + L" of " + Megabytes(total);
+                if (text != w->shown) {
+                    w->shown = text;
+                    SendMessageW(hwnd, TDM_SET_ELEMENT_TEXT, TDE_CONTENT, reinterpret_cast<LPARAM>(w->shown.c_str()));
+                }
+            }
             break;
         }
-        const uint64_t total = w->progress->total, done = w->progress->done;
-        if (total > 0) {
-            SendMessageW(hwnd, TDM_SET_MARQUEE_PROGRESS_BAR, FALSE, 0);
-            SendMessageW(hwnd, TDM_SET_PROGRESS_BAR_POS, static_cast<WPARAM>(done * 1000 / total), 0);
-            const std::wstring text = Megabytes(done) + L" of " + Megabytes(total);
-            if (text != w->shown) {
-                w->shown = text;
-                SendMessageW(hwnd, TDM_SET_ELEMENT_TEXT, TDE_CONTENT, reinterpret_cast<LPARAM>(w->shown.c_str()));
-            }
-        }
-        break;
-    }
-    case TDN_BUTTON_CLICKED:
-        if (wParam == IDCANCEL && !w->progress->finished) g_cancel = true;
-        break;
+        case TDN_BUTTON_CLICKED:
+            if (wParam == IDCANCEL && !w->progress->finished) g_cancel = true;
+            break;
     }
     return S_OK;
 }
 
 // Runs `work` on a thread behind a progress dialog (none with --yes).
-void RunWithProgress(const std::wstring& heading, const std::function<void(Progress*)>& work)
-{
+void RunWithProgress(const std::wstring& heading, const std::function<void(Progress*)>& work) {
     Progress progress;
     std::thread t([&] {
         work(&progress);
@@ -663,8 +635,7 @@ void RunWithProgress(const std::wstring& heading, const std::function<void(Progr
     t.join();
 }
 
-std::optional<std::wstring> PickFolder(const std::wstring& start)
-{
+std::optional<std::wstring> PickFolder(const std::wstring& start) {
     IFileOpenDialog* dialog = nullptr;
     if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog)))) return std::nullopt;
     DWORD flags = 0;
@@ -697,8 +668,7 @@ std::optional<std::wstring> PickFolder(const std::wstring& start)
 
 // The game folder to install into: the one Steam has (confirmed), or one
 // the player picks.
-std::optional<std::wstring> ChooseGame(const sfv::UpdateInfo& info)
-{
+std::optional<std::wstring> ChooseGame(const sfv::UpdateInfo& info) {
     std::optional<std::wstring> win64;
     if (!g_opt.game.empty()) {
         win64 = GameWin64(g_opt.game);
@@ -720,8 +690,7 @@ std::optional<std::wstring> ChooseGame(const sfv::UpdateInfo& info)
                           L"Polarity goes into your Street Fighter V folder:\n" + GameRoot(*win64),
                           {{kInstall, L"Install"}, {kChoose, L"Choose another folder"}});
             if (pressed == kInstall) return win64;
-        }
-        else {
+        } else {
             pressed = Ask(L"Where is Street Fighter V?",
                           L"Steam doesn't list it on this PC. Choose the folder it's installed in. In Steam, right-click "
                           L"the game, then Manage, Browse local files shows it.",
@@ -741,8 +710,7 @@ std::optional<std::wstring> ChooseGame(const sfv::UpdateInfo& info)
 }
 
 // The same installer again as administrator, for this folder.
-bool RelaunchElevated(const std::wstring& win64)
-{
+bool RelaunchElevated(const std::wstring& win64) {
     wchar_t exe[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, exe, MAX_PATH);
     std::wstring args = L"--elevated --game \"" + win64 + L"\"";
@@ -759,8 +727,7 @@ bool RelaunchElevated(const std::wstring& win64)
     return ok;
 }
 
-void ParseArgs()
-{
+void ParseArgs() {
     int argc = 0;
     wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     for (int i = 1; i < argc; i++) {
@@ -781,27 +748,23 @@ void ParseArgs()
 // have to build it.
 std::wstring g_crashText;
 
-void PrepareCrashText()
-{
+void PrepareCrashText() {
     g_crashText = instlog::Path().empty() ? L"It couldn't write a log."
-                                      : L"Its log is at\n" + Wide(instlog::Path()) + L"\n\nSend that file to the Polarity team.";
+                                          : L"Its log is at\n" + Wide(instlog::Path()) + L"\n\nSend that file to the Polarity team.";
 }
 
-void ShowCrashWindow()
-{
+void ShowCrashWindow() {
     if (g_opt.yes) return;
     const std::wstring text = L"Polarity Installer stopped unexpectedly\n\n" + g_crashText;
     MessageBoxW(nullptr, text.c_str(), kTitle, MB_OK | MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND);
 }
 
-void RawText(const char* s)
-{
+void RawText(const char* s) {
     instlog::WriteRaw(s, std::strlen(s));
 }
 
 // "module+0xoffset" for a code address.
-void RawWhere(DWORD64 address)
-{
+void RawWhere(DWORD64 address) {
     char line[MAX_PATH + 48];
     HMODULE module = nullptr;
     char name[MAX_PATH] = "?";
@@ -811,8 +774,7 @@ void RawWhere(DWORD64 address)
         const char* slash = std::strrchr(name, '\\');
         std::snprintf(line, sizeof(line), "%s+0x%llx", slash ? slash + 1 : name,
                       static_cast<unsigned long long>(address - reinterpret_cast<DWORD64>(module)));
-    }
-    else {
+    } else {
         std::snprintf(line, sizeof(line), "0x%llx", static_cast<unsigned long long>(address));
     }
     RawText(line);
@@ -821,8 +783,7 @@ void RawWhere(DWORD64 address)
 // The stack from `context` up, through the x64 unwind data (offsets read
 // against the build's .pdb). Past the first, each is a return address less
 // one: inside the call, so a symbolizer gives the call's line.
-void RawStack(CONTEXT context)
-{
+void RawStack(CONTEXT context) {
     RawText("  stack:");
     for (int i = 0; i < 32 && context.Rip != 0; i++) {
         RawText(" ");
@@ -833,8 +794,7 @@ void RawStack(CONTEXT context)
             PVOID handlerData = nullptr;
             DWORD64 establisher = 0;
             RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, fn, &context, &handlerData, &establisher, nullptr);
-        }
-        else {
+        } else {
             // A leaf function: the return address is on top of the stack.
             context.Rip = *reinterpret_cast<const DWORD64*>(context.Rsp);
             context.Rsp += 8;
@@ -843,8 +803,7 @@ void RawStack(CONTEXT context)
     RawText("\r\n");
 }
 
-LONG WINAPI OnCrash(EXCEPTION_POINTERS* ep)
-{
+LONG WINAPI OnCrash(EXCEPTION_POINTERS* ep) {
     const EXCEPTION_RECORD* r = ep->ExceptionRecord;
     char line[160];
     std::snprintf(line, sizeof(line), "crash: exception 0x%08lX at ", static_cast<unsigned long>(r->ExceptionCode));
@@ -852,7 +811,8 @@ LONG WINAPI OnCrash(EXCEPTION_POINTERS* ep)
     RawWhere(reinterpret_cast<DWORD64>(r->ExceptionAddress));
     if (r->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && r->NumberParameters >= 2) {
         std::snprintf(line, sizeof(line), ", %s 0x%llx",
-                      r->ExceptionInformation[0] == 0 ? "reading" : r->ExceptionInformation[0] == 1 ? "writing" : "running",
+                      r->ExceptionInformation[0] == 0 ? "reading" : r->ExceptionInformation[0] == 1 ? "writing"
+                                                                                                    : "running",
                       static_cast<unsigned long long>(r->ExceptionInformation[1]));
         RawText(line);
     }
@@ -862,17 +822,14 @@ LONG WINAPI OnCrash(EXCEPTION_POINTERS* ep)
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
-void OnTerminate()
-{
+void OnTerminate() {
     std::string what = "std::terminate without an exception";
     if (const std::exception_ptr e = std::current_exception()) {
         try {
             std::rethrow_exception(e);
-        }
-        catch (const std::exception& x) {
+        } catch (const std::exception& x) {
             what = std::string("uncaught exception: ") + x.what();
-        }
-        catch (...) {
+        } catch (...) {
             what = "uncaught exception of an unknown type";
         }
     }
@@ -884,16 +841,14 @@ void OnTerminate()
     _exit(3);
 }
 
-void InstallCrashHandlers()
-{
+void InstallCrashHandlers() {
     SetUnhandledExceptionFilter(OnCrash);
     std::set_terminate(OnTerminate);
     _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
 }
 
 // polarity-installer.log next to the installer, else in the temp folder.
-void OpenLog()
-{
+void OpenLog() {
     wchar_t profile[MAX_PATH] = {};
     if (GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH)) instlog::SetHome(Utf8(profile));
     wchar_t exe[MAX_PATH] = {};
@@ -905,8 +860,7 @@ void OpenLog()
     instlog::Open({Utf8(dir), Utf8(temp)});
 }
 
-void LogStart()
-{
+void LogStart() {
     SYSTEMTIME t;
     GetLocalTime(&t);
     char when[32];
@@ -936,23 +890,19 @@ void LogStart()
 }
 
 // A deliberate crash, to test the report (--test-crash).
-__declspec(noinline) void TestCrash(const std::string& kind)
-{
+__declspec(noinline) void TestCrash(const std::string& kind) {
     Log("crashing on purpose: " + kind);
     if (kind == "segv") {
         volatile uintptr_t address = 8;
         *reinterpret_cast<volatile int*>(address) = 1;
-    }
-    else if (kind == "throw") {
+    } else if (kind == "throw") {
         throw std::runtime_error("a test exception");
-    }
-    else if (kind == "terminate") {
+    } else if (kind == "terminate") {
         std::terminate();
     }
 }
 
-int Run()
-{
+int Run() {
     if (g_opt.find) {
         const auto win64 = FindGame();
         if (win64) Print(*win64);
@@ -1021,8 +971,7 @@ int Run()
 
 } // namespace
 
-int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
-{
+int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     ParseArgs();
     if (g_opt.yes || g_opt.find) AttachConsole(ATTACH_PARENT_PROCESS);
     if (!g_opt.find) {
@@ -1038,8 +987,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     int code = 1;
     try {
         code = Run();
-    }
-    catch (const std::exception& e) {
+    } catch (const std::exception& e) {
         Log(std::string("unexpected error: ") + e.what());
         Tell(L"Polarity couldn't be installed",
              L"Something unexpected went wrong (" + Wide(e.what()) + L")." + LogNote(), TD_ERROR_ICON);

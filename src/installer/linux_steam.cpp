@@ -11,15 +11,13 @@ namespace polarity::installer {
 
 namespace {
 
-std::string Lower(std::string_view s)
-{
+std::string Lower(std::string_view s) {
     std::string out(s);
     std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return out;
 }
 
-std::string Trim(std::string_view s)
-{
+std::string Trim(std::string_view s) {
     size_t a = 0, b = s.size();
     while (a < b && std::isspace(static_cast<unsigned char>(s[a]))) a++;
     while (b > a && std::isspace(static_cast<unsigned char>(s[b - 1]))) b--;
@@ -30,13 +28,11 @@ bool Space(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
 
 class Parser {
 public:
-    explicit Parser(std::string_view text) : s_(text)
-    {
+    explicit Parser(std::string_view text) : s_(text) {
         if (s_.substr(0, 3) == "\xEF\xBB\xBF") i_ = 3; // a byte order mark
     }
 
-    bool Document(std::vector<VdfEntry>* out, std::string* error)
-    {
+    bool Document(std::vector<VdfEntry>* out, std::string* error) {
         size_t end = 0;
         if (Block(true, out, &end)) return true;
         if (error) *error = error_;
@@ -44,26 +40,27 @@ public:
     }
 
 private:
-    enum class Kind { End, Open, Close, String };
+    enum class Kind { End,
+                      Open,
+                      Close,
+                      String };
+
     struct Token {
         Kind kind;
         std::string text;
         size_t start, end;
     };
 
-    void Skip()
-    {
+    void Skip() {
         while (i_ < s_.size()) {
             if (Space(s_[i_])) i_++;
             else if (s_.compare(i_, 2, "//") == 0) {
                 while (i_ < s_.size() && s_[i_] != '\n') i_++;
-            }
-            else return;
+            } else return;
         }
     }
 
-    bool Next(Token* t)
-    {
+    bool Next(Token* t) {
         Skip();
         t->start = i_;
         if (i_ >= s_.size()) {
@@ -83,10 +80,10 @@ private:
             while (i_ < s_.size() && s_[i_] != '"') {
                 if (s_[i_] == '\\' && i_ + 1 < s_.size()) {
                     const char c = s_[i_ + 1];
-                    t->text += c == 'n' ? '\n' : c == 't' ? '\t' : c;
+                    t->text += c == 'n' ? '\n' : c == 't' ? '\t'
+                                                          : c;
                     i_ += 2;
-                }
-                else {
+                } else {
                     t->text += s_[i_++];
                 }
             }
@@ -99,14 +96,12 @@ private:
         return true;
     }
 
-    bool Fail(const std::string& why)
-    {
+    bool Fail(const std::string& why) {
         if (error_.empty()) error_ = why + " (offset " + std::to_string(i_) + ")";
         return false;
     }
 
-    bool Block(bool top, std::vector<VdfEntry>* out, size_t* end)
-    {
+    bool Block(bool top, std::vector<VdfEntry>* out, size_t* end) {
         if (++depth_ > 64) return Fail("blocks nest too deep");
         for (;;) {
             Token key;
@@ -134,12 +129,10 @@ private:
             if (value.kind == Kind::Open) {
                 e.block = true;
                 if (!Block(false, &e.children, &e.vend)) return false;
-            }
-            else if (value.kind == Kind::String) {
+            } else if (value.kind == Kind::String) {
                 e.value = value.text;
                 e.vend = value.end;
-            }
-            else {
+            } else {
                 return Fail("no value for \"" + key.text + "\"");
             }
             out->push_back(std::move(e));
@@ -156,8 +149,7 @@ private:
     std::string error_;
 };
 
-const VdfEntry* Child(const std::vector<VdfEntry>& entries, std::string_view key, bool block)
-{
+const VdfEntry* Child(const std::vector<VdfEntry>& entries, std::string_view key, bool block) {
     const std::string want = Lower(key);
     for (const VdfEntry& e : entries) {
         if (e.block == block && Lower(e.key) == want) return &e;
@@ -165,8 +157,7 @@ const VdfEntry* Child(const std::vector<VdfEntry>& entries, std::string_view key
     return nullptr;
 }
 
-std::string IndentOf(std::string_view text, size_t pos)
-{
+std::string IndentOf(std::string_view text, size_t pos) {
     const size_t line = text.rfind('\n', pos == 0 ? 0 : pos - 1);
     const size_t from = line == std::string_view::npos ? 0 : line + 1;
     size_t i = from;
@@ -176,8 +167,7 @@ std::string IndentOf(std::string_view text, size_t pos)
 
 // `text` with `lines` (indents relative to the block's entries) added as
 // the last entries of `block`.
-std::string InsertInBlock(std::string_view text, const VdfEntry& block, const std::vector<std::string>& lines)
-{
+std::string InsertInBlock(std::string_view text, const VdfEntry& block, const std::vector<std::string>& lines) {
     const size_t close = block.vend - 1;
     const std::string outer = IndentOf(text, block.kstart), inner = outer + "\t";
     std::string body;
@@ -188,40 +178,34 @@ std::string InsertInBlock(std::string_view text, const VdfEntry& block, const st
     if (!Trim(text.substr(lineStart, close - lineStart)).empty()) {
         // The closing brace shares its line with something: a line of its own.
         out.append(text.substr(0, close)).append("\n").append(body).append(outer).append(text.substr(close));
-    }
-    else {
+    } else {
         out.append(text.substr(0, lineStart)).append(body).append(text.substr(lineStart));
     }
     return out;
 }
 
-const VdfEntry* LaunchOptionsEntry(const VdfEntry& app)
-{
+const VdfEntry* LaunchOptionsEntry(const VdfEntry& app) {
     return Child(app.children, "LaunchOptions", false);
 }
 
-bool IsDir(const std::string& p)
-{
+bool IsDir(const std::string& p) {
     struct stat st{};
     return stat(p.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-bool IsFile(const std::string& p)
-{
+bool IsFile(const std::string& p) {
     struct stat st{};
     return stat(p.c_str(), &st) == 0 && S_ISREG(st.st_mode);
 }
 
 } // namespace
 
-bool VdfParse(std::string_view text, std::vector<VdfEntry>* out, std::string* error)
-{
+bool VdfParse(std::string_view text, std::vector<VdfEntry>* out, std::string* error) {
     out->clear();
     return Parser(text).Document(out, error);
 }
 
-const VdfEntry* VdfFind(const std::vector<VdfEntry>& entries, const std::vector<std::string_view>& path)
-{
+const VdfEntry* VdfFind(const std::vector<VdfEntry>& entries, const std::vector<std::string_view>& path) {
     const std::vector<VdfEntry>* at = &entries;
     const VdfEntry* found = nullptr;
     for (std::string_view key : path) {
@@ -232,8 +216,7 @@ const VdfEntry* VdfFind(const std::vector<VdfEntry>& entries, const std::vector<
     return found;
 }
 
-std::string VdfQuote(std::string_view value)
-{
+std::string VdfQuote(std::string_view value) {
     std::string out = "\"";
     for (char c : value) {
         if (c == '\\' || c == '"') out += '\\';
@@ -242,8 +225,7 @@ std::string VdfQuote(std::string_view value)
     return out + "\"";
 }
 
-std::optional<std::string> GetLaunchOptions(std::string_view text)
-{
+std::optional<std::string> GetLaunchOptions(std::string_view text) {
     std::vector<VdfEntry> tree;
     if (!VdfParse(text, &tree, nullptr)) return std::nullopt;
     const VdfEntry* app = VdfFind(tree, {"UserLocalConfigStore", "Software", "Valve", "Steam", "apps", kAppId});
@@ -252,8 +234,7 @@ std::optional<std::string> GetLaunchOptions(std::string_view text)
     return opts ? opts->value : std::string();
 }
 
-bool SetLaunchOptions(std::string_view text, const std::string& options, std::string* out, std::string* error)
-{
+bool SetLaunchOptions(std::string_view text, const std::string& options, std::string* out, std::string* error) {
     std::vector<VdfEntry> tree;
     if (!VdfParse(text, &tree, error)) return false;
     const VdfEntry* steam = VdfFind(tree, {"UserLocalConfigStore", "Software", "Valve", "Steam"});
@@ -281,8 +262,7 @@ bool SetLaunchOptions(std::string_view text, const std::string& options, std::st
     return true;
 }
 
-std::string WithOverride(std::string_view options)
-{
+std::string WithOverride(std::string_view options) {
     const std::string o = Trim(options);
     const std::string key = "WINEDLLOVERRIDES=";
     const std::string ours = std::string("WINEDLLOVERRIDES=\"") + kOverride + "\"";
@@ -308,8 +288,7 @@ std::string WithOverride(std::string_view options)
             value = o.substr(vs + 1, close - vs - 1);
             ve = close + 1;
         }
-    }
-    else {
+    } else {
         while (ve < o.size() && !std::isspace(static_cast<unsigned char>(o[ve])) && o[ve] != '"' && o[ve] != '\'') ve++;
         value = o.substr(vs, ve - vs);
     }
@@ -348,8 +327,7 @@ std::string WithOverride(std::string_view options)
     return o.substr(0, at) + "WINEDLLOVERRIDES=\"" + merged + "\"" + o.substr(ve);
 }
 
-std::vector<std::string> LibraryPaths(std::string_view text)
-{
+std::vector<std::string> LibraryPaths(std::string_view text) {
     std::vector<std::string> out;
     std::vector<VdfEntry> tree;
     if (!VdfParse(text, &tree, nullptr)) return out;
@@ -367,8 +345,7 @@ std::vector<std::string> LibraryPaths(std::string_view text)
     return out;
 }
 
-std::string InstallDir(std::string_view text)
-{
+std::string InstallDir(std::string_view text) {
     std::vector<VdfEntry> tree;
     if (!VdfParse(text, &tree, nullptr)) return {};
     const VdfEntry* state = VdfFind(tree, {"AppState"});
@@ -376,8 +353,7 @@ std::string InstallDir(std::string_view text)
     return dir ? dir->value : std::string();
 }
 
-std::optional<std::string> GameWin64(const std::string& picked)
-{
+std::optional<std::string> GameWin64(const std::string& picked) {
     std::string p = picked;
     if (p.rfind("~/", 0) == 0 || p == "~") {
         const char* home = std::getenv("HOME");
@@ -394,8 +370,7 @@ std::optional<std::string> GameWin64(const std::string& picked)
     return std::nullopt;
 }
 
-std::string GameRoot(const std::string& win64)
-{
+std::string GameRoot(const std::string& win64) {
     std::string p = win64;
     for (int i = 0; i < 3; i++) {
         const size_t slash = p.find_last_of('/');

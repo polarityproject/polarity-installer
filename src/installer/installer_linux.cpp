@@ -85,56 +85,49 @@ constexpr int kTimeoutMs = 20000;
 struct Failure {
     std::string message;
 };
+
 // The player stopped it (message: why, or empty to say nothing).
 struct Cancelled {
     std::string message;
 };
 
-std::string Megabytes(uint64_t n)
-{
+std::string Megabytes(uint64_t n) {
     char text[32];
     std::snprintf(text, sizeof(text), "%.1f MB", n / (1024.0 * 1024.0));
     return text;
 }
 
-void Log(const std::string& line)
-{
+void Log(const std::string& line) {
     log::Write(line);
 }
 
-std::string Quoted(const std::string& s)
-{
+std::string Quoted(const std::string& s) {
     return "\"" + s + "\"";
 }
 
 // What follows a failure's message in the window that reports it.
-std::string LogNote()
-{
+std::string LogNote() {
     return log::Path().empty() ? "" : "\n\nDetails are in the installer's log:\n" + log::Path();
 }
 
 // ----- files and processes ---------------------------------------------------------
 
-bool IsFile(const std::string& p)
-{
+bool IsFile(const std::string& p) {
     struct stat st{};
     return stat(p.c_str(), &st) == 0 && S_ISREG(st.st_mode);
 }
 
-bool IsDir(const std::string& p)
-{
+bool IsDir(const std::string& p) {
     struct stat st{};
     return stat(p.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-bool Exists(const std::string& p)
-{
+bool Exists(const std::string& p) {
     struct stat st{};
     return lstat(p.c_str(), &st) == 0;
 }
 
-std::optional<std::string> ReadFile(const std::string& path, size_t maxBytes = 64 * 1024 * 1024)
-{
+std::optional<std::string> ReadFile(const std::string& path, size_t maxBytes = 64 * 1024 * 1024) {
     FILE* f = std::fopen(path.c_str(), "rb");
     if (!f) return std::nullopt;
     std::string data;
@@ -148,8 +141,7 @@ std::optional<std::string> ReadFile(const std::string& path, size_t maxBytes = 6
     return data;
 }
 
-bool WriteFile(const std::string& path, const void* data, size_t size, mode_t mode = 0644)
-{
+bool WriteFile(const std::string& path, const void* data, size_t size, mode_t mode = 0644) {
     const int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
     if (fd < 0) return false;
     const auto* p = static_cast<const uint8_t*>(data);
@@ -167,28 +159,25 @@ bool WriteFile(const std::string& path, const void* data, size_t size, mode_t mo
     return close(fd) == 0 && ok;
 }
 
-void MakeDirs(const std::string& dir)
-{
+void MakeDirs(const std::string& dir) {
     if (dir.empty() || IsDir(dir)) return;
     const size_t slash = dir.find_last_of('/');
     if (slash != std::string::npos && slash > 0) MakeDirs(dir.substr(0, slash));
     mkdir(dir.c_str(), 0755);
 }
 
-std::string Dirname(const std::string& p)
-{
+std::string Dirname(const std::string& p) {
     const size_t slash = p.find_last_of('/');
-    return slash == std::string::npos ? "." : slash == 0 ? "/" : p.substr(0, slash);
+    return slash == std::string::npos ? "." : slash == 0 ? "/"
+                                                         : p.substr(0, slash);
 }
 
-std::string RealPath(const std::string& p)
-{
+std::string RealPath(const std::string& p) {
     char real[PATH_MAX];
     return realpath(p.c_str(), real) ? std::string(real) : p;
 }
 
-std::vector<std::string> ListDir(const std::string& dir)
-{
+std::vector<std::string> ListDir(const std::string& dir) {
     std::vector<std::string> out;
     if (DIR* d = opendir(dir.c_str())) {
         while (dirent* e = readdir(d)) {
@@ -200,8 +189,7 @@ std::vector<std::string> ListDir(const std::string& dir)
     return out;
 }
 
-std::string Which(const std::string& name)
-{
+std::string Which(const std::string& name) {
     const char* path = std::getenv("PATH");
     std::string all = path ? path : "/usr/local/bin:/usr/bin:/bin";
     size_t from = 0;
@@ -216,8 +204,7 @@ std::string Which(const std::string& name)
     return {};
 }
 
-std::vector<char*> Argv(const std::vector<std::string>& args)
-{
+std::vector<char*> Argv(const std::vector<std::string>& args) {
     std::vector<char*> argv;
     for (const std::string& a : args) argv.push_back(const_cast<char*>(a.c_str()));
     argv.push_back(nullptr);
@@ -225,8 +212,7 @@ std::vector<char*> Argv(const std::vector<std::string>& args)
 }
 
 // Runs a program and waits: its exit code (-1 when it could not run) and stdout.
-int RunCapture(const std::vector<std::string>& args, std::string* out)
-{
+int RunCapture(const std::vector<std::string>& args, std::string* out) {
     int fds[2];
     if (pipe(fds) != 0) return -1;
     const pid_t pid = fork();
@@ -263,8 +249,7 @@ int RunCapture(const std::vector<std::string>& args, std::string* out)
 }
 
 // Starts a program on its own (its own session, not waited for).
-void RunDetached(const std::vector<std::string>& args)
-{
+void RunDetached(const std::vector<std::string>& args) {
     const pid_t pid = fork();
     if (pid == 0) {
         setsid();
@@ -285,8 +270,7 @@ void RunDetached(const std::vector<std::string>& args)
 }
 
 // This user's live processes whose name (/proc/<pid>/comm) passes `match`.
-std::vector<int> Processes(const std::function<bool(const std::string&)>& match)
-{
+std::vector<int> Processes(const std::function<bool(const std::string&)>& match) {
     std::vector<int> found;
     const uid_t me = getuid();
     for (const std::string& name : ListDir("/proc")) {
@@ -305,13 +289,11 @@ std::vector<int> Processes(const std::function<bool(const std::string&)>& match)
     return found;
 }
 
-bool SteamRunning()
-{
+bool SteamRunning() {
     return !Processes([](const std::string& c) { return c == "steam"; }).empty();
 }
 
-bool GameRunning()
-{
+bool GameRunning() {
     return !Processes([](const std::string& c) { return c.rfind("StreetFighterV", 0) == 0; }).empty();
 }
 
@@ -322,18 +304,15 @@ struct Url {
     std::string host, port, path;
 };
 
-bool ParseUrl(const std::string& url, Url* out)
-{
+bool ParseUrl(const std::string& url, Url* out) {
     size_t rest;
     if (url.rfind("https://", 0) == 0) {
         out->https = true;
         rest = 8;
-    }
-    else if (url.rfind("http://", 0) == 0) {
+    } else if (url.rfind("http://", 0) == 0) {
         out->https = false;
         rest = 7;
-    }
-    else {
+    } else {
         return false;
     }
     const size_t slash = url.find('/', rest);
@@ -343,8 +322,7 @@ bool ParseUrl(const std::string& url, Url* out)
     if (colon != std::string::npos && hostport.find(']') == std::string::npos) {
         out->host = hostport.substr(0, colon);
         out->port = hostport.substr(colon + 1);
-    }
-    else {
+    } else {
         out->host = hostport;
         out->port = out->https ? "443" : "80";
     }
@@ -352,8 +330,7 @@ bool ParseUrl(const std::string& url, Url* out)
     return !out->host.empty();
 }
 
-std::string TlsError(int code)
-{
+std::string TlsError(int code) {
     char text[200];
     mbedtls_strerror(code, text, sizeof(text));
     return text;
@@ -364,8 +341,7 @@ std::string TlsError(int code)
 // once the signature and the hashes check out.
 class Roots {
 public:
-    Roots()
-    {
+    Roots() {
         mbedtls_x509_crt_init(&crt_);
         std::vector<std::string> files;
         if (const char* env = std::getenv("SSL_CERT_FILE")) files.push_back(env);
@@ -383,8 +359,11 @@ public:
         }
         if (!loaded_) Log("certificates: none of the usual bundles; downloads are checked by signature and hashes only");
     }
+
     ~Roots() { mbedtls_x509_crt_free(&crt_); }
+
     bool Loaded() const { return loaded_; }
+
     mbedtls_x509_crt* Get() { return &crt_; }
 
 private:
@@ -394,16 +373,15 @@ private:
 
 class Connection {
 public:
-    Connection()
-    {
+    Connection() {
         mbedtls_net_init(&net_);
         mbedtls_ssl_init(&ssl_);
         mbedtls_ssl_config_init(&conf_);
         mbedtls_entropy_init(&entropy_);
         mbedtls_ctr_drbg_init(&drbg_);
     }
-    ~Connection()
-    {
+
+    ~Connection() {
         if (tls_) mbedtls_ssl_close_notify(&ssl_);
         mbedtls_net_free(&net_);
         mbedtls_ssl_free(&ssl_);
@@ -412,8 +390,7 @@ public:
         mbedtls_entropy_free(&entropy_);
     }
 
-    void Open(const Url& url)
-    {
+    void Open(const Url& url) {
         static Roots roots;
         int r = mbedtls_net_connect(&net_, url.host.c_str(), url.port.c_str(), MBEDTLS_NET_PROTO_TCP);
         if (r != 0) {
@@ -431,8 +408,7 @@ public:
         if (roots.Loaded()) {
             mbedtls_ssl_conf_ca_chain(&conf_, roots.Get(), nullptr);
             mbedtls_ssl_conf_authmode(&conf_, MBEDTLS_SSL_VERIFY_REQUIRED);
-        }
-        else {
+        } else {
             mbedtls_ssl_conf_authmode(&conf_, MBEDTLS_SSL_VERIFY_NONE);
         }
         if ((r = mbedtls_ssl_setup(&ssl_, &conf_)) != 0 || (r = mbedtls_ssl_set_hostname(&ssl_, url.host.c_str())) != 0) {
@@ -446,8 +422,7 @@ public:
         }
     }
 
-    void Send(const std::string& data)
-    {
+    void Send(const std::string& data) {
         size_t done = 0;
         while (done < data.size()) {
             const auto* p = reinterpret_cast<const unsigned char*>(data.data()) + done;
@@ -459,8 +434,7 @@ public:
     }
 
     // Bytes read; 0 at the end of the stream.
-    size_t Read(unsigned char* buf, size_t size)
-    {
+    size_t Read(unsigned char* buf, size_t size) {
         for (;;) {
             const int r = tls_ ? mbedtls_ssl_read(&ssl_, buf, size) : mbedtls_net_recv_timeout(&net_, buf, size, kTimeoutMs);
             if (r > 0) return static_cast<size_t>(r);
@@ -487,26 +461,22 @@ private:
 // of body. `progress` gets the bytes so far and returns false to stop.
 std::vector<uint8_t> HttpGetOnce(std::string url, size_t maxBytes, const std::function<bool(uint64_t)>& progress);
 
-std::vector<uint8_t> HttpGet(const std::string& url, size_t maxBytes, const std::function<bool(uint64_t)>& progress = nullptr)
-{
+std::vector<uint8_t> HttpGet(const std::string& url, size_t maxBytes, const std::function<bool(uint64_t)>& progress = nullptr) {
     Log("GET " + url);
     try {
         std::vector<uint8_t> body = HttpGetOnce(url, maxBytes, progress);
         Log("  " + std::to_string(body.size()) + " bytes");
         return body;
-    }
-    catch (const Failure& f) {
+    } catch (const Failure& f) {
         Log("  failed: " + f.message);
         throw;
-    }
-    catch (const Cancelled&) {
+    } catch (const Cancelled&) {
         Log("  cancelled");
         throw;
     }
 }
 
-std::vector<uint8_t> HttpGetOnce(std::string url, size_t maxBytes, const std::function<bool(uint64_t)>& progress)
-{
+std::vector<uint8_t> HttpGetOnce(std::string url, size_t maxBytes, const std::function<bool(uint64_t)>& progress) {
     for (int redirects = 0; redirects < 6; redirects++) {
         Url u;
         if (!ParseUrl(url, &u)) throw Failure{"Not a web address: " + url};
@@ -593,8 +563,7 @@ std::vector<uint8_t> HttpGetOnce(std::string url, size_t maxBytes, const std::fu
     throw Failure{"The Polarity site redirected too many times."};
 }
 
-sfv::UpdateInfo FetchInfo(const std::string& site)
-{
+sfv::UpdateInfo FetchInfo(const std::string& site) {
     const std::vector<uint8_t> body = HttpGet(site, kMaxInfoBytes);
     const std::vector<uint8_t> sig = HttpGet(site + ".sig", 4096);
     const std::vector<uint8_t> signature =
@@ -612,8 +581,7 @@ sfv::UpdateInfo FetchInfo(const std::string& site)
     return info;
 }
 
-bool SameFile(const std::string& path, const sfv::UpdateFile& f)
-{
+bool SameFile(const std::string& path, const sfv::UpdateFile& f) {
     struct stat st{};
     if (stat(path.c_str(), &st) != 0 || static_cast<uint64_t>(st.st_size) != f.size) return false;
     const auto data = ReadFile(path, f.size + 1);
@@ -624,13 +592,13 @@ bool SameFile(const std::string& path, const sfv::UpdateFile& f)
 // Downloads what differs from the game folder and swaps it in, old files
 // aside first so a failure puts everything back. How many files changed.
 int InstallFiles(const std::string& win64, const sfv::UpdateInfo& info, const std::string& site,
-                 const std::function<bool(uint64_t, uint64_t)>& progress)
-{
+                 const std::function<bool(uint64_t, uint64_t)>& progress) {
     struct Item {
         const sfv::UpdateFile* f;
         std::string target, fresh, old;
         bool hadOld = false;
     };
+
     std::vector<Item> items;
     uint64_t total = 0;
     for (const sfv::UpdateFile& f : info.files) {
@@ -664,8 +632,7 @@ int InstallFiles(const std::string& win64, const sfv::UpdateInfo& info, const st
             done += f.size;
             progress(done, total);
         }
-    }
-    catch (...) {
+    } catch (...) {
         Log("removing the downloaded files; the game folder is unchanged");
         cleanup();
         throw;
@@ -700,8 +667,7 @@ int InstallFiles(const std::string& win64, const sfv::UpdateInfo& info, const st
 
 // ----- Steam ---------------------------------------------------------------------
 
-std::vector<std::string> SteamRoots(const std::vector<std::string>& given)
-{
+std::vector<std::string> SteamRoots(const std::vector<std::string>& given) {
     std::vector<std::string> out;
     if (!given.empty()) {
         for (const std::string& r : given) {
@@ -719,8 +685,7 @@ std::vector<std::string> SteamRoots(const std::vector<std::string>& given)
     return out;
 }
 
-std::vector<std::string> SteamLibraries(const std::vector<std::string>& roots)
-{
+std::vector<std::string> SteamLibraries(const std::vector<std::string>& roots) {
     std::vector<std::string> libs;
     auto add = [&](const std::string& lib) {
         const std::string p = RealPath(lib);
@@ -738,8 +703,7 @@ std::vector<std::string> SteamLibraries(const std::vector<std::string>& roots)
     return libs;
 }
 
-std::optional<std::string> FindGame(const std::vector<std::string>& libs)
-{
+std::optional<std::string> FindGame(const std::vector<std::string>& libs) {
     for (const std::string& lib : libs) {
         std::string folder = "StreetFighterV";
         const auto acf = ReadFile(lib + "/steamapps/appmanifest_" + kAppId + ".acf", 1024 * 1024);
@@ -755,8 +719,7 @@ std::optional<std::string> FindGame(const std::vector<std::string>& libs)
     return std::nullopt;
 }
 
-std::vector<std::string> LocalConfigs(const std::vector<std::string>& roots)
-{
+std::vector<std::string> LocalConfigs(const std::vector<std::string>& roots) {
     std::vector<std::string> out;
     for (const std::string& root : roots) {
         for (const std::string& id : ListDir(root + "/userdata")) {
@@ -768,8 +731,7 @@ std::vector<std::string> LocalConfigs(const std::vector<std::string>& roots)
 }
 
 // The accounts whose launch options do not load the mod yet.
-std::vector<std::string> AccountsNeedingOptions(const std::vector<std::string>& paths)
-{
+std::vector<std::string> AccountsNeedingOptions(const std::vector<std::string>& paths) {
     std::vector<std::string> out;
     for (const std::string& p : paths) {
         const auto text = ReadFile(p);
@@ -790,8 +752,7 @@ std::vector<std::string> AccountsNeedingOptions(const std::vector<std::string>& 
     return out;
 }
 
-std::vector<std::string> SteamCommand(const std::vector<std::string>& roots)
-{
+std::vector<std::string> SteamCommand(const std::vector<std::string>& roots) {
     if (!Which("steam").empty()) return {"steam"};
     for (const std::string& r : roots) {
         if (r.find("/com.valvesoftware.Steam/") != std::string::npos && !Which("flatpak").empty()) {
@@ -801,8 +762,7 @@ std::vector<std::string> SteamCommand(const std::vector<std::string>& roots)
     return {};
 }
 
-void CloseSteam(const std::vector<std::string>& roots)
-{
+void CloseSteam(const std::vector<std::string>& roots) {
     std::vector<std::string> cmd = SteamCommand(roots);
     if (cmd.empty()) throw Failure{"The steam command was not found. Close Steam yourself and run the installer again."};
     cmd.push_back("-shutdown");
@@ -821,8 +781,7 @@ void CloseSteam(const std::vector<std::string>& roots)
     throw Failure{"Steam did not close. Close it yourself and run the installer again."};
 }
 
-void OpenSteam(const std::vector<std::string>& roots)
-{
+void OpenSteam(const std::vector<std::string>& roots) {
     const std::vector<std::string> cmd = SteamCommand(roots);
     Log(cmd.empty() ? "cannot reopen Steam: no steam command" : "reopening Steam: " + cmd.front());
     if (!cmd.empty()) RunDetached(cmd);
@@ -830,15 +789,16 @@ void OpenSteam(const std::vector<std::string>& roots)
 
 // Sets the launch options in each account's localconfig.vdf (a copy of the
 // file as it was next to it); the files it could not change.
-std::vector<std::string> WriteLaunchOptions(const std::vector<std::string>& paths)
-{
+std::vector<std::string> WriteLaunchOptions(const std::vector<std::string>& paths) {
     std::vector<std::string> failed;
     for (const std::string& p : paths) {
         const auto text = ReadFile(p);
         const auto opts = text ? GetLaunchOptions(*text) : std::nullopt;
         std::string updated, why;
         if (!opts || !SetLaunchOptions(*text, WithOverride(*opts), &updated, &why)) {
-            Log(p + ": cannot set the launch options (" + (!text ? "cannot read the file" : !opts ? "unreadable" : why) + ")");
+            Log(p + ": cannot set the launch options (" + (!text ? "cannot read the file" : !opts ? "unreadable"
+                                                                                                  : why) +
+                ")");
             failed.push_back(p);
             continue;
         }
@@ -881,14 +841,16 @@ class TerminalUi : public Ui {
 public:
     explicit TerminalUi(bool answerYes) { yes = answerYes; }
 
-    void Tell(const std::string& heading, const std::string& text, const char* kind) override
-    {
-        (std::strcmp(kind, "error") == 0 ? std::cerr : std::cout) << "\n" << heading << "\n" << text << std::endl;
+    void Tell(const std::string& heading, const std::string& text, const char* kind) override {
+        (std::strcmp(kind, "error") == 0 ? std::cerr : std::cout) << "\n"
+                                                                  << heading << "\n"
+                                                                  << text << std::endl;
     }
 
-    int Choose(const std::string& heading, const std::string& text, const std::vector<std::string>& buttons) override
-    {
-        std::cout << "\n" << heading << "\n" << text << std::endl;
+    int Choose(const std::string& heading, const std::string& text, const std::vector<std::string>& buttons) override {
+        std::cout << "\n"
+                  << heading << "\n"
+                  << text << std::endl;
         if (yes) return 0;
         for (size_t i = 0; i < buttons.size(); i++) std::cout << "  " << i + 1 << ". " << buttons[i] << "\n";
         for (;;) {
@@ -902,8 +864,7 @@ public:
         }
     }
 
-    std::optional<std::string> PickFolder(const std::string& title, const std::string&) override
-    {
+    std::optional<std::string> PickFolder(const std::string& title, const std::string&) override {
         if (yes) return std::nullopt;
         std::cout << title << " (the folder path, Enter to cancel): " << std::flush;
         std::string answer;
@@ -911,14 +872,12 @@ public:
         return answer;
     }
 
-    void ProgressStart(const std::string& heading) override
-    {
+    void ProgressStart(const std::string& heading) override {
         std::cout << heading << std::endl;
         percent_ = -1;
     }
 
-    bool Progress(double fraction, const std::string& text) override
-    {
+    bool Progress(double fraction, const std::string& text) override {
         const int percent = static_cast<int>(fraction * 100);
         if (percent != percent_) {
             percent_ = percent;
@@ -928,8 +887,7 @@ public:
         return true;
     }
 
-    void ProgressEnd() override
-    {
+    void ProgressEnd() override {
         if (percent_ >= 0) std::cout << std::endl;
         percent_ = -1;
     }
@@ -938,8 +896,7 @@ private:
     int percent_ = -1;
 };
 
-std::string Markup(const std::string& s)
-{
+std::string Markup(const std::string& s) {
     std::string out;
     for (char c : s) {
         if (c == '&') out += "&amp;";
@@ -952,14 +909,13 @@ std::string Markup(const std::string& s)
 
 class ZenityUi : public Ui {
 public:
-    void Tell(const std::string& heading, const std::string& text, const char* kind) override
-    {
-        const std::string k = std::strcmp(kind, "error") == 0 ? "--error" : std::strcmp(kind, "warning") == 0 ? "--warning" : "--info";
+    void Tell(const std::string& heading, const std::string& text, const char* kind) override {
+        const std::string k = std::strcmp(kind, "error") == 0 ? "--error" : std::strcmp(kind, "warning") == 0 ? "--warning"
+                                                                                                              : "--info";
         Run({k, "--text=<b>" + Markup(heading) + "</b>\n\n" + Markup(text)}, nullptr);
     }
 
-    int Choose(const std::string& heading, const std::string& text, const std::vector<std::string>& buttons) override
-    {
+    int Choose(const std::string& heading, const std::string& text, const std::vector<std::string>& buttons) override {
         std::vector<std::string> args{"--question", "--text=<b>" + Markup(heading) + "</b>\n\n" + Markup(text),
                                       "--ok-label=" + buttons[0], "--cancel-label=Cancel"};
         for (size_t i = 1; i < buttons.size(); i++) args.push_back("--extra-button=" + buttons[i]);
@@ -972,8 +928,7 @@ public:
         return -1;
     }
 
-    std::optional<std::string> PickFolder(const std::string& title, const std::string& start) override
-    {
+    std::optional<std::string> PickFolder(const std::string& title, const std::string& start) override {
         std::vector<std::string> args{"--file-selection", "--directory", "--title=" + title};
         if (!start.empty()) args.push_back("--filename=" + start + "/");
         std::string out;
@@ -981,8 +936,7 @@ public:
         return out;
     }
 
-    void ProgressStart(const std::string& heading) override
-    {
+    void ProgressStart(const std::string& heading) override {
         heading_ = heading;
         int fds[2];
         if (pipe(fds) != 0) return;
@@ -1004,8 +958,7 @@ public:
         if (pid_ <= 0) close(fds[1]);
     }
 
-    bool Progress(double fraction, const std::string& text) override
-    {
+    bool Progress(double fraction, const std::string& text) override {
         if (pid_ <= 0) return true;
         int status;
         if (waitpid(pid_, &status, WNOHANG) == pid_) {
@@ -1017,8 +970,7 @@ public:
         return write(fd_, line.data(), line.size()) == static_cast<ssize_t>(line.size());
     }
 
-    void ProgressEnd() override
-    {
+    void ProgressEnd() override {
         if (fd_ >= 0) {
             const char done[] = "100\n";
             (void)!write(fd_, done, sizeof(done) - 1);
@@ -1033,8 +985,7 @@ public:
     }
 
 private:
-    int Run(std::vector<std::string> args, std::string* out)
-    {
+    int Run(std::vector<std::string> args, std::string* out) {
         args.insert(args.begin(), {"zenity", std::string("--title=") + kTitle, "--width=460"});
         std::string ignored;
         return RunCapture(args, out ? out : &ignored);
@@ -1049,13 +1000,11 @@ class KdialogUi : public TerminalUi {
 public:
     KdialogUi() : TerminalUi(false) {}
 
-    void Tell(const std::string& heading, const std::string& text, const char* kind) override
-    {
+    void Tell(const std::string& heading, const std::string& text, const char* kind) override {
         Run({std::strcmp(kind, "error") == 0 ? "--error" : "--msgbox", heading + "\n\n" + text}, nullptr);
     }
 
-    int Choose(const std::string& heading, const std::string& text, const std::vector<std::string>& buttons) override
-    {
+    int Choose(const std::string& heading, const std::string& text, const std::vector<std::string>& buttons) override {
         const std::string body = heading + "\n\n" + text;
         if (buttons.size() == 1) {
             return Run({"--yesno", body, "--yes-label=" + buttons[0], "--no-label=Cancel"}, nullptr) == 0 ? 0 : -1;
@@ -1063,11 +1012,11 @@ public:
         const int code = Run({"--yesnocancel", body, "--yes-label=" + buttons[0], "--no-label=" + buttons[1],
                               "--cancel-label=Cancel"},
                              nullptr);
-        return code == 0 ? 0 : code == 1 ? 1 : -1;
+        return code == 0 ? 0 : code == 1 ? 1
+                                         : -1;
     }
 
-    std::optional<std::string> PickFolder(const std::string&, const std::string& start) override
-    {
+    std::optional<std::string> PickFolder(const std::string&, const std::string& start) override {
         const char* home = std::getenv("HOME");
         std::string out;
         if (Run({"--getexistingdirectory", start.empty() ? std::string(home ? home : "/") : start}, &out) != 0 || out.empty()) {
@@ -1077,8 +1026,7 @@ public:
     }
 
 private:
-    int Run(std::vector<std::string> args, std::string* out)
-    {
+    int Run(std::vector<std::string> args, std::string* out) {
         args.insert(args.begin(), {"kdialog", std::string("--title=") + kTitle});
         std::string ignored;
         return RunCapture(args, out ? out : &ignored);
@@ -1101,22 +1049,19 @@ class LoggedUi : public Ui {
 public:
     explicit LoggedUi(std::unique_ptr<Ui> inner) : inner_(std::move(inner)) { yes = inner_->yes; }
 
-    void Tell(const std::string& heading, const std::string& text, const char* kind) override
-    {
+    void Tell(const std::string& heading, const std::string& text, const char* kind) override {
         Log(std::string("shown (") + kind + "): " + heading + " / " + log::OneLine(text));
         inner_->Tell(heading, text, kind);
     }
 
-    int Choose(const std::string& heading, const std::string& text, const std::vector<std::string>& buttons) override
-    {
+    int Choose(const std::string& heading, const std::string& text, const std::vector<std::string>& buttons) override {
         Log("asked: " + heading + " / " + log::OneLine(text));
         const int pick = inner_->Choose(heading, text, buttons);
         Log("  answer: " + (pick >= 0 && pick < static_cast<int>(buttons.size()) ? buttons[pick] : std::string("Cancel")));
         return pick;
     }
 
-    std::optional<std::string> PickFolder(const std::string& title, const std::string& start) override
-    {
+    std::optional<std::string> PickFolder(const std::string& title, const std::string& start) override {
         auto picked = inner_->PickFolder(title, start);
         Log(picked ? "folder picked: " + *picked : std::string("folder picker cancelled"));
         return picked;
@@ -1124,8 +1069,7 @@ public:
 
     void ProgressStart(const std::string& heading) override { inner_->ProgressStart(heading); }
 
-    bool Progress(double fraction, const std::string& text) override
-    {
+    bool Progress(double fraction, const std::string& text) override {
         const bool go = inner_->Progress(fraction, text);
         if (!go) Log("progress window closed: cancelled");
         return go;
@@ -1138,8 +1082,7 @@ private:
 };
 
 // Which windows to use: "zenity", "kdialog" or "terminal".
-std::string UiKind(const Options& o)
-{
+std::string UiKind(const Options& o) {
     if (!o.yes && !o.terminal && (std::getenv("DISPLAY") || std::getenv("WAYLAND_DISPLAY"))) {
         if (!Which("zenity").empty()) return "zenity";
         if (!Which("kdialog").empty()) return "kdialog";
@@ -1147,8 +1090,7 @@ std::string UiKind(const Options& o)
     return "terminal";
 }
 
-std::unique_ptr<Ui> MakeUi(const Options& o, const std::string& kind)
-{
+std::unique_ptr<Ui> MakeUi(const Options& o, const std::string& kind) {
     std::unique_ptr<Ui> ui;
     if (kind == "zenity") ui = std::make_unique<ZenityUi>();
     else if (kind == "kdialog") ui = std::make_unique<KdialogUi>();
@@ -1156,26 +1098,22 @@ std::unique_ptr<Ui> MakeUi(const Options& o, const std::string& kind)
     return std::make_unique<LoggedUi>(std::move(ui));
 }
 
-sfv::UpdateInfo GetInfo(Ui& ui, const std::string& site)
-{
+sfv::UpdateInfo GetInfo(Ui& ui, const std::string& site) {
     for (;;) {
         try {
             return FetchInfo(site);
-        }
-        catch (const Failure& f) {
+        } catch (const Failure& f) {
             if (ui.yes || ui.Choose("Polarity couldn't be downloaded", f.message, {"Try again"}) != 0) throw Cancelled{f.message};
         }
     }
 }
 
-std::string ChooseGame(Ui& ui, const Options& o, const sfv::UpdateInfo& info, const std::vector<std::string>& libs)
-{
+std::string ChooseGame(Ui& ui, const Options& o, const sfv::UpdateInfo& info, const std::vector<std::string>& libs) {
     std::optional<std::string> win64;
     if (!o.game.empty()) {
         win64 = GameWin64(o.game);
         if (!win64) throw Failure{"StreetFighterV.exe isn't in " + o.game + "."};
-    }
-    else {
+    } else {
         win64 = FindGame(libs);
     }
     if (ui.yes) {
@@ -1189,8 +1127,7 @@ std::string ChooseGame(Ui& ui, const Options& o, const sfv::UpdateInfo& info, co
                              "Polarity goes into your Street Fighter V folder:\n" + GameRoot(*win64),
                              {"Install", "Choose another folder"});
             if (pick == 0) return *win64;
-        }
-        else {
+        } else {
             pick = ui.Choose("Where is Street Fighter V?",
                              "Steam doesn't list it here. Choose the folder it's installed in. In Steam, the game's gear "
                              "button, then Manage, Browse local files shows it.",
@@ -1203,8 +1140,7 @@ std::string ChooseGame(Ui& ui, const Options& o, const sfv::UpdateInfo& info, co
         if (!picked) continue;
         if (auto found = GameWin64(*picked)) {
             win64 = found;
-        }
-        else {
+        } else {
             ui.Tell("That isn't a Street Fighter V folder",
                     "StreetFighterV.exe isn't in " + *picked + ". Choose the folder named StreetFighterV in your Steam library.",
                     "warning");
@@ -1212,8 +1148,7 @@ std::string ChooseGame(Ui& ui, const Options& o, const sfv::UpdateInfo& info, co
     }
 }
 
-void WaitForGameClosed(Ui& ui)
-{
+void WaitForGameClosed(Ui& ui) {
     while (GameRunning()) {
         if (ui.yes || ui.Choose("Close Street Fighter V first", "The game is running. Close it, then choose Try again.",
                                 {"Try again"}) != 0) {
@@ -1222,8 +1157,7 @@ void WaitForGameClosed(Ui& ui)
     }
 }
 
-int Install(Ui& ui, const std::string& site, const std::string& win64, const sfv::UpdateInfo& info)
-{
+int Install(Ui& ui, const std::string& site, const std::string& win64, const sfv::UpdateInfo& info) {
     for (;;) {
         ui.ProgressStart("Installing Polarity " + info.version);
         try {
@@ -1232,22 +1166,21 @@ int Install(Ui& ui, const std::string& site, const std::string& win64, const sfv
             });
             ui.ProgressEnd();
             return changed;
-        }
-        catch (const Failure& f) {
+        } catch (const Failure& f) {
             ui.ProgressEnd();
             if (ui.yes || ui.Choose("Polarity couldn't be installed", f.message, {"Try again"}) != 0) throw Cancelled{f.message};
-        }
-        catch (const Cancelled&) {
+        } catch (const Cancelled&) {
             ui.ProgressEnd();
             throw;
         }
     }
 }
 
-enum class LaunchOptions { Set, Had, Left };
+enum class LaunchOptions { Set,
+                           Had,
+                           Left };
 
-LaunchOptions SetOptions(Ui& ui, const std::vector<std::string>& roots)
-{
+LaunchOptions SetOptions(Ui& ui, const std::vector<std::string>& roots) {
     const std::vector<std::string> paths = LocalConfigs(roots);
     Log("Steam accounts with a localconfig.vdf: " + std::to_string(paths.size()));
     if (paths.empty()) return LaunchOptions::Left;
@@ -1274,14 +1207,14 @@ LaunchOptions SetOptions(Ui& ui, const std::vector<std::string>& roots)
     return need.empty() ? LaunchOptions::Had : LaunchOptions::Set;
 }
 
-void Usage()
-{
+void Usage() {
     std::cout << "polarity-installer: installs Polarity into Street Fighter V (Steam on Linux).\n"
-                 "  --site URL         update info (default " << kSite << ")\n"
-                 "  --game DIR         the game folder\n"
-                 "  --steam-root DIR   a Steam folder to use (repeatable)\n"
-                 "  --yes              no questions\n"
-                 "  --terminal         questions in the terminal\n";
+                 "  --site URL         update info (default "
+              << kSite << ")\n"
+                          "  --game DIR         the game folder\n"
+                          "  --steam-root DIR   a Steam folder to use (repeatable)\n"
+                          "  --yes              no questions\n"
+                          "  --terminal         questions in the terminal\n";
 }
 
 // ----- the log and crashes -------------------------------------------------------------
@@ -1293,8 +1226,7 @@ struct CrashWindow {
     std::string terminal; // without a window: printed on stderr
 } g_crashWindow;
 
-void PrepareCrashWindow(const std::string& uiKind)
-{
+void PrepareCrashWindow(const std::string& uiKind) {
     const std::string& path = log::Path();
     const std::string heading = "Polarity Installer stopped unexpectedly";
     const std::string text = path.empty() ? "It couldn't write a log."
@@ -1305,20 +1237,17 @@ void PrepareCrashWindow(const std::string& uiKind)
     if (uiKind == "zenity") {
         g_crashWindow.args = {program, std::string("--title=") + kTitle, "--width=460", "--error",
                               "--text=<b>" + Markup(heading) + "</b>\n\n" + Markup(text)};
-    }
-    else {
+    } else {
         g_crashWindow.args = {program, std::string("--title=") + kTitle, "--error", heading + "\n\n" + text};
     }
     g_crashWindow.argv = Argv(g_crashWindow.args);
 }
 
-void RawText(const char* s)
-{
+void RawText(const char* s) {
     log::WriteRaw(s, std::strlen(s));
 }
 
-void RawNumber(uintptr_t v, int base)
-{
+void RawNumber(uintptr_t v, int base) {
     char text[24];
     char* p = text + sizeof(text);
     *--p = '\0';
@@ -1333,18 +1262,17 @@ void RawNumber(uintptr_t v, int base)
     RawText(p);
 }
 
-const char* SignalName(int sig)
-{
+const char* SignalName(int sig) {
     switch (sig) {
-    case SIGSEGV: return "SIGSEGV";
-    case SIGBUS: return "SIGBUS";
-    case SIGFPE: return "SIGFPE";
-    case SIGILL: return "SIGILL";
-    case SIGABRT: return "SIGABRT";
-    case SIGINT: return "SIGINT";
-    case SIGTERM: return "SIGTERM";
-    case SIGHUP: return "SIGHUP";
-    default: return "?";
+        case SIGSEGV: return "SIGSEGV";
+        case SIGBUS: return "SIGBUS";
+        case SIGFPE: return "SIGFPE";
+        case SIGILL: return "SIGILL";
+        case SIGABRT: return "SIGABRT";
+        case SIGINT: return "SIGINT";
+        case SIGTERM: return "SIGTERM";
+        case SIGHUP: return "SIGHUP";
+        default: return "?";
     }
 }
 
@@ -1359,15 +1287,13 @@ extern "C" const char etext[];
 // from -fPIE code). Set at the start.
 uintptr_t g_slide = 0;
 
-void FindSlide()
-{
+void FindSlide() {
     uint16_t type = 0;
     std::memcpy(&type, __ehdr_start + 16, sizeof(type));
     g_slide = type == 3 ? reinterpret_cast<uintptr_t>(__ehdr_start) : 0;
 }
 
-bool InCode(uintptr_t address)
-{
+bool InCode(uintptr_t address) {
     return address >= reinterpret_cast<uintptr_t>(__executable_start) && address < reinterpret_cast<uintptr_t>(etext);
 }
 
@@ -1375,8 +1301,7 @@ bool InCode(uintptr_t address)
 // are in the program's code (libc's own functions keep no frame pointer).
 // Each is its return address less one: an address inside the call, which
 // addr2line gives the call's line for.
-void RawStack(uintptr_t bp, uintptr_t sp)
-{
+void RawStack(uintptr_t bp, uintptr_t sp) {
     for (int i = 0; i < 32 && bp >= sp && bp - sp < (8u << 20) && (bp & 7) == 0; i++) {
         const auto* frame = reinterpret_cast<const uintptr_t*>(bp);
         if (!InCode(frame[1])) break;
@@ -1390,8 +1315,7 @@ void RawStack(uintptr_t bp, uintptr_t sp)
 volatile sig_atomic_t g_stackWritten = 0;
 
 // Async-signal-safe throughout: raw writes, fork and execve only.
-void OnCrash(int sig, siginfo_t* info, void* context)
-{
+void OnCrash(int sig, siginfo_t* info, void* context) {
     RawText("crash: signal ");
     RawNumber(static_cast<uintptr_t>(sig), 10);
     RawText(" (");
@@ -1424,8 +1348,7 @@ void OnCrash(int sig, siginfo_t* info, void* context)
         }
         int status;
         if (pid > 0) waitpid(pid, &status, 0);
-    }
-    else {
+    } else {
         (void)!write(2, g_crashWindow.terminal.data(), g_crashWindow.terminal.size());
     }
     signal(sig, SIG_DFL);
@@ -1433,8 +1356,7 @@ void OnCrash(int sig, siginfo_t* info, void* context)
 }
 
 // Ctrl+C, a closed terminal, a kill: noted, then the usual end.
-void OnStop(int sig)
-{
+void OnStop(int sig) {
     RawText("stopped by signal ");
     RawNumber(static_cast<uintptr_t>(sig), 10);
     RawText(" (");
@@ -1444,17 +1366,14 @@ void OnStop(int sig)
     raise(sig);
 }
 
-void OnTerminate()
-{
+void OnTerminate() {
     std::string what = "std::terminate without an exception";
     if (const std::exception_ptr e = std::current_exception()) {
         try {
             std::rethrow_exception(e);
-        }
-        catch (const std::exception& x) {
+        } catch (const std::exception& x) {
             what = std::string("uncaught exception: ") + x.what();
-        }
-        catch (...) {
+        } catch (...) {
             what = "uncaught exception of an unknown type";
         }
     }
@@ -1467,8 +1386,7 @@ void OnTerminate()
     std::abort(); // the SIGABRT handler shows the window
 }
 
-void InstallCrashHandlers()
-{
+void InstallCrashHandlers() {
     static char altStack[64 * 1024];
     stack_t ss{};
     ss.ss_sp = altStack;
@@ -1489,8 +1407,7 @@ void InstallCrashHandlers()
 
 // polarity-installer.log next to the installer, else in the player's state
 // folder, else /tmp.
-void OpenLog()
-{
+void OpenLog() {
     const char* home = std::getenv("HOME");
     if (home && *home) log::SetHome(home);
     if (log::Open({Dirname(RealPath("/proc/self/exe"))})) return;
@@ -1504,8 +1421,7 @@ void OpenLog()
     log::Open({state, "/tmp"});
 }
 
-std::string OsName()
-{
+std::string OsName() {
     for (const char* f : {"/etc/os-release", "/usr/lib/os-release"}) {
         const auto text = ReadFile(f, 64 * 1024);
         if (!text) continue;
@@ -1518,8 +1434,7 @@ std::string OsName()
     return "unknown";
 }
 
-void LogStart(int argc, char** argv, const std::string& uiKind)
-{
+void LogStart(int argc, char** argv, const std::string& uiKind) {
     char when[64] = "?";
     const std::time_t now = std::time(nullptr);
     tm local{};
@@ -1541,23 +1456,19 @@ void LogStart(int argc, char** argv, const std::string& uiKind)
 }
 
 // A deliberate crash, to test the report (--test-crash).
-[[gnu::noinline]] void TestCrash(const std::string& kind)
-{
+[[gnu::noinline]] void TestCrash(const std::string& kind) {
     Log("crashing on purpose: " + kind);
     if (kind == "segv") {
         volatile uintptr_t address = 8;
         *reinterpret_cast<volatile int*>(address) = 1;
-    }
-    else if (kind == "throw") {
+    } else if (kind == "throw") {
         throw std::runtime_error("a test exception");
-    }
-    else if (kind == "terminate") {
+    } else if (kind == "terminate") {
         std::terminate();
     }
 }
 
-int Run(const Options& o, Ui& ui)
-{
+int Run(const Options& o, Ui& ui) {
     sfv::UpdateInfo info;
     int changed = 0;
     LaunchOptions options = LaunchOptions::Left;
@@ -1573,25 +1484,23 @@ int Run(const Options& o, Ui& ui)
         WaitForGameClosed(ui);
         changed = Install(ui, o.site, win64, info);
         options = SetOptions(ui, roots);
-    }
-    catch (const Cancelled& c) {
+    } catch (const Cancelled& c) {
         Log(c.message.empty() ? "cancelled" : "stopped: " + c.message);
         if (!c.message.empty()) ui.Tell("Polarity couldn't be installed", c.message + LogNote(), "error");
         return 1;
-    }
-    catch (const Failure& f) {
+    } catch (const Failure& f) {
         Log("failed: " + f.message);
         ui.Tell("Polarity couldn't be installed", f.message + LogNote(), "error");
         return 1;
-    }
-    catch (const std::exception& e) {
+    } catch (const std::exception& e) {
         Log(std::string("unexpected error: ") + e.what());
         ui.Tell("Polarity couldn't be installed", std::string("Something unexpected went wrong (") + e.what() + ")." + LogNote(),
                 "error");
         return 1;
     }
     Log("result: " + std::to_string(changed) + " files changed, launch options " +
-        (options == LaunchOptions::Set ? "set" : options == LaunchOptions::Had ? "already set" : "left to the player"));
+        (options == LaunchOptions::Set ? "set" : options == LaunchOptions::Had ? "already set"
+                                                                               : "left to the player"));
     const bool fresh = changed > 0 || options == LaunchOptions::Set;
     const std::string heading = fresh ? "Polarity is installed" : "Polarity " + info.version + " is already installed";
     std::string text = fresh ? "Polarity " + info.version + " will run the next time you start Street Fighter V."
@@ -1605,8 +1514,7 @@ int Run(const Options& o, Ui& ui)
     return 0;
 }
 
-int Main(int argc, char** argv)
-{
+int Main(int argc, char** argv) {
     Options o;
     for (int i = 1; i < argc; i++) {
         const std::string a = argv[i];
@@ -1626,8 +1534,7 @@ int Main(int argc, char** argv)
         else if (a == "--help" || a == "-h") {
             Usage();
             return 0;
-        }
-        else {
+        } else {
             Usage();
             return 2;
         }
@@ -1653,7 +1560,6 @@ int Main(int argc, char** argv)
 } // namespace
 } // namespace polarity::installer
 
-int main(int argc, char** argv)
-{
+int main(int argc, char** argv) {
     return polarity::installer::Main(argc, argv);
 }

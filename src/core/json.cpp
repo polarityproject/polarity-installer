@@ -10,8 +10,7 @@ class Parser {
 public:
     explicit Parser(std::string_view text) : s_(text) {}
 
-    bool Document(JsonValue* out, std::string* error)
-    {
+    bool Document(JsonValue* out, std::string* error) {
         const bool ok = Value(*out, 0) && (Space(), at_ == s_.size());
         if (!ok && error) *error = (error_.empty() ? std::string("unexpected text") : error_) + " at offset " + std::to_string(at_);
         return ok;
@@ -22,17 +21,16 @@ private:
     size_t at_ = 0;
     std::string error_;
 
-    bool Fail(const char* what)
-    {
+    bool Fail(const char* what) {
         if (error_.empty()) error_ = what;
         return false;
     }
-    void Space()
-    {
+
+    void Space() {
         while (at_ < s_.size() && (s_[at_] == ' ' || s_[at_] == '\t' || s_[at_] == '\n' || s_[at_] == '\r')) at_++;
     }
-    bool Eat(char c)
-    {
+
+    bool Eat(char c) {
         Space();
         if (at_ < s_.size() && s_[at_] == c) {
             at_++;
@@ -40,15 +38,14 @@ private:
         }
         return false;
     }
-    bool Word(std::string_view w)
-    {
+
+    bool Word(std::string_view w) {
         if (s_.substr(at_, w.size()) != w) return false;
         at_ += w.size();
         return true;
     }
 
-    bool Value(JsonValue& v, int depth)
-    {
+    bool Value(JsonValue& v, int depth) {
         if (depth > 32) return Fail("nested too deeply");
         Space();
         if (at_ >= s_.size()) return Fail("unexpected end");
@@ -72,8 +69,7 @@ private:
         return Number(v);
     }
 
-    bool Object(JsonValue& v, int depth)
-    {
+    bool Object(JsonValue& v, int depth) {
         v.type = JsonValue::Type::Object;
         at_++;
         if (Eat('}')) return true;
@@ -89,8 +85,7 @@ private:
         return Eat('}') || Fail("expected '}'");
     }
 
-    bool Array(JsonValue& v, int depth)
-    {
+    bool Array(JsonValue& v, int depth) {
         v.type = JsonValue::Type::Array;
         at_++;
         if (Eat(']')) return true;
@@ -102,19 +97,16 @@ private:
         return Eat(']') || Fail("expected ']'");
     }
 
-    static void Utf8(std::string& out, unsigned cp)
-    {
+    static void Utf8(std::string& out, unsigned cp) {
         if (cp < 0x80) out += static_cast<char>(cp);
         else if (cp < 0x800) {
             out += static_cast<char>(0xC0 | cp >> 6);
             out += static_cast<char>(0x80 | (cp & 0x3F));
-        }
-        else if (cp < 0x10000) {
+        } else if (cp < 0x10000) {
             out += static_cast<char>(0xE0 | cp >> 12);
             out += static_cast<char>(0x80 | (cp >> 6 & 0x3F));
             out += static_cast<char>(0x80 | (cp & 0x3F));
-        }
-        else {
+        } else {
             out += static_cast<char>(0xF0 | cp >> 18);
             out += static_cast<char>(0x80 | (cp >> 12 & 0x3F));
             out += static_cast<char>(0x80 | (cp >> 6 & 0x3F));
@@ -122,8 +114,7 @@ private:
         }
     }
 
-    bool Hex4(unsigned* out)
-    {
+    bool Hex4(unsigned* out) {
         if (at_ + 4 > s_.size()) return false;
         unsigned v = 0;
         for (int i = 0; i < 4; i++) {
@@ -138,8 +129,7 @@ private:
         return true;
     }
 
-    bool String(std::string& out)
-    {
+    bool String(std::string& out) {
         at_++; // the opening quote
         while (at_ < s_.size()) {
             const char c = s_[at_++];
@@ -152,35 +142,34 @@ private:
             if (at_ >= s_.size()) break;
             const char e = s_[at_++];
             switch (e) {
-            case '"': out += '"'; break;
-            case '\\': out += '\\'; break;
-            case '/': out += '/'; break;
-            case 'b': out += '\b'; break;
-            case 'f': out += '\f'; break;
-            case 'n': out += '\n'; break;
-            case 'r': out += '\r'; break;
-            case 't': out += '\t'; break;
-            case 'u': {
-                unsigned cp;
-                if (!Hex4(&cp)) return Fail("bad \\u escape");
-                // A surrogate pair is one code point.
-                if (cp >= 0xD800 && cp < 0xDC00 && Word("\\u")) {
-                    unsigned low;
-                    if (!Hex4(&low) || low < 0xDC00 || low >= 0xE000) return Fail("bad surrogate pair");
-                    cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+                case '"': out += '"'; break;
+                case '\\': out += '\\'; break;
+                case '/': out += '/'; break;
+                case 'b': out += '\b'; break;
+                case 'f': out += '\f'; break;
+                case 'n': out += '\n'; break;
+                case 'r': out += '\r'; break;
+                case 't': out += '\t'; break;
+                case 'u': {
+                    unsigned cp;
+                    if (!Hex4(&cp)) return Fail("bad \\u escape");
+                    // A surrogate pair is one code point.
+                    if (cp >= 0xD800 && cp < 0xDC00 && Word("\\u")) {
+                        unsigned low;
+                        if (!Hex4(&low) || low < 0xDC00 || low >= 0xE000) return Fail("bad surrogate pair");
+                        cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+                    }
+                    Utf8(out, cp);
+                    break;
                 }
-                Utf8(out, cp);
-                break;
-            }
-            default:
-                return Fail("bad escape");
+                default:
+                    return Fail("bad escape");
             }
         }
         return Fail("unterminated string");
     }
 
-    bool Number(JsonValue& v)
-    {
+    bool Number(JsonValue& v) {
         const size_t from = at_;
         if (at_ < s_.size() && s_[at_] == '-') at_++;
         while (at_ < s_.size() && ((s_[at_] >= '0' && s_[at_] <= '9') || s_[at_] == '.' || s_[at_] == 'e' ||
@@ -198,8 +187,7 @@ private:
 
 } // namespace
 
-const JsonValue* JsonValue::Find(std::string_view key) const
-{
+const JsonValue* JsonValue::Find(std::string_view key) const {
     if (type != Type::Object) return nullptr;
     for (const auto& [k, v] : object) {
         if (k == key) return &v;
@@ -207,20 +195,17 @@ const JsonValue* JsonValue::Find(std::string_view key) const
     return nullptr;
 }
 
-std::string JsonValue::Str(std::string_view key, const std::string& fallback) const
-{
+std::string JsonValue::Str(std::string_view key, const std::string& fallback) const {
     const JsonValue* v = Find(key);
     return v && v->type == Type::String ? v->string : fallback;
 }
 
-double JsonValue::Num(std::string_view key, double fallback) const
-{
+double JsonValue::Num(std::string_view key, double fallback) const {
     const JsonValue* v = Find(key);
     return v && v->type == Type::Number ? v->number : fallback;
 }
 
-bool ParseJson(std::string_view text, JsonValue* out, std::string* error)
-{
+bool ParseJson(std::string_view text, JsonValue* out, std::string* error) {
     JsonValue v;
     Parser p(text);
     if (!p.Document(&v, error)) return false;

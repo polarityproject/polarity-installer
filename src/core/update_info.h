@@ -27,7 +27,7 @@
 namespace sfv {
 
 struct UpdateFile {
-    std::string path;   // under the game's Binaries\Win64: a plain file name, or Polarity/fonts/<name> (SafeUpdatePath; SFVR/fonts/ from the old site)
+    std::string path; // under the game's Binaries\Win64: a plain file name, or Polarity/fonts/<name> (SafeUpdatePath; SFVR/fonts/ from the old site)
     uint64_t size = 0;
     std::string sha256; // lowercase hex
     std::string url;

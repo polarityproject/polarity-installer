@@ -29,8 +29,7 @@ int g_fd = -1;
 #endif
 
 #ifdef _WIN32
-std::wstring Wide(const std::string& s)
-{
+std::wstring Wide(const std::string& s) {
     if (s.empty()) return {};
     const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
     std::wstring w(n, L'\0');
@@ -39,8 +38,7 @@ std::wstring Wide(const std::string& s)
 }
 #endif
 
-std::string Join(const std::string& dir, const char* name)
-{
+std::string Join(const std::string& dir, const char* name) {
     if (dir.empty()) return name;
     const char last = dir.back();
 #ifdef _WIN32
@@ -51,8 +49,7 @@ std::string Join(const std::string& dir, const char* name)
     return dir + sep + name;
 }
 
-std::string Now()
-{
+std::string Now() {
     char text[32];
 #ifdef _WIN32
     SYSTEMTIME t;
@@ -71,8 +68,7 @@ std::string Now()
 
 } // namespace
 
-bool Open(const std::vector<std::string>& dirs)
-{
+bool Open(const std::vector<std::string>& dirs) {
     std::lock_guard<std::mutex> hold(g_lock);
     for (const std::string& dir : dirs) {
         if (dir.empty()) continue;
@@ -110,20 +106,17 @@ bool Open(const std::vector<std::string>& dirs)
     return false;
 }
 
-const std::string& Path()
-{
+const std::string& Path() {
     return g_path;
 }
 
-void SetHome(const std::string& home)
-{
+void SetHome(const std::string& home) {
     std::lock_guard<std::mutex> hold(g_lock);
     g_home = home;
     while (g_home.size() > 1 && (g_home.back() == '/' || g_home.back() == '\\')) g_home.pop_back();
 }
 
-void WriteRaw(const char* text, size_t size)
-{
+void WriteRaw(const char* text, size_t size) {
 #ifdef _WIN32
     if (g_file == INVALID_HANDLE_VALUE) return;
     DWORD written = 0;
@@ -139,8 +132,7 @@ void WriteRaw(const char* text, size_t size)
 #endif
 }
 
-void Write(const std::string& line)
-{
+void Write(const std::string& line) {
     std::lock_guard<std::mutex> hold(g_lock);
     std::string text = line;
     if (!g_home.empty()) {
@@ -168,16 +160,14 @@ void Write(const std::string& line)
 #endif
 }
 
-std::string OneLine(const std::string& text)
-{
+std::string OneLine(const std::string& text) {
     std::string out;
     for (size_t i = 0; i < text.size(); i++) {
         if (text[i] == '\r') continue;
         if (text[i] == '\n') {
             while (i + 1 < text.size() && text[i + 1] == '\n') i++;
             out += " / ";
-        }
-        else {
+        } else {
             out += text[i];
         }
     }

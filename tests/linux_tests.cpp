@@ -18,37 +18,35 @@ using namespace polarity::installer;
 
 static int g_failed = 0, g_checked = 0;
 
-#define CHECK(cond)                                                                                                    \
-    do {                                                                                                               \
-        g_checked++;                                                                                                   \
-        if (!(cond)) {                                                                                                 \
-            g_failed++;                                                                                                \
-            std::printf("FAILED %s:%d: %s\n", __FILE__, __LINE__, #cond);                                             \
-        }                                                                                                              \
+#define CHECK(cond)                                                       \
+    do {                                                                  \
+        g_checked++;                                                      \
+        if (!(cond)) {                                                    \
+            g_failed++;                                                   \
+            std::printf("FAILED %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+        }                                                                 \
     } while (0)
 
-#define CHECK_EQ(a, b)                                                                                                 \
-    do {                                                                                                               \
-        g_checked++;                                                                                                   \
-        const auto va = (a);                                                                                           \
-        const auto vb = (b);                                                                                           \
-        if (!(va == vb)) {                                                                                             \
-            g_failed++;                                                                                                \
-            std::printf("FAILED %s:%d: %s\n  got:  [%s]\n  want: [%s]\n", __FILE__, __LINE__, #a,                     \
-                        std::string(va).c_str(), std::string(vb).c_str());                                             \
-        }                                                                                                              \
+#define CHECK_EQ(a, b)                                                                            \
+    do {                                                                                          \
+        g_checked++;                                                                              \
+        const auto va = (a);                                                                      \
+        const auto vb = (b);                                                                      \
+        if (!(va == vb)) {                                                                        \
+            g_failed++;                                                                           \
+            std::printf("FAILED %s:%d: %s\n  got:  [%s]\n  want: [%s]\n", __FILE__, __LINE__, #a, \
+                        std::string(va).c_str(), std::string(vb).c_str());                        \
+        }                                                                                         \
     } while (0)
 
-static std::string Read(const std::string& path)
-{
+static std::string Read(const std::string& path) {
     std::ifstream f(path, std::ios::binary);
     std::stringstream s;
     s << f.rdbuf();
     return s.str();
 }
 
-static void Signature(const std::string& dir)
-{
+static void Signature(const std::string& dir) {
     const std::string body = Read(dir + "/update.json"), sigText = Read(dir + "/update.json.sig");
     CHECK(!body.empty() && !sigText.empty());
     const auto sig = sfv::Base64Decode(sigText);
@@ -76,8 +74,7 @@ static void Signature(const std::string& dir)
              std::string("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));
 }
 
-static void Paths()
-{
+static void Paths() {
     for (const char* ok : {"polarity.dll", "xinput1_3.dll", "polarity_fonts_license.txt", "Polarity/fonts/a.ttc", "SFVR/fonts/b.ttc"}) {
         CHECK(sfv::SafeUpdatePath(ok));
     }
@@ -90,8 +87,7 @@ static void Paths()
              std::string("https://polaritymod.link/releases/0.4.2/polarity.dll"));
 }
 
-static void Override()
-{
+static void Override() {
     const std::map<std::string, std::string> cases{
         {"", "WINEDLLOVERRIDES=\"xinput1_3=n,b\" %command%"},
         {"%command%", "WINEDLLOVERRIDES=\"xinput1_3=n,b\" %command%"},
@@ -140,15 +136,13 @@ static const std::string kLocalConfig =
     "\t}\n"
     "}\n";
 
-static std::string Replace(std::string s, const std::string& from, const std::string& to)
-{
+static std::string Replace(std::string s, const std::string& from, const std::string& to) {
     const size_t at = s.find(from);
     if (at != std::string::npos) s.replace(at, from.size(), to);
     return s;
 }
 
-static std::string Set(const std::string& before, const std::string& options)
-{
+static std::string Set(const std::string& before, const std::string& options) {
     std::string after, error;
     CHECK(SetLaunchOptions(before, options, &after, &error));
     CHECK(GetLaunchOptions(after) == std::optional<std::string>(options));
@@ -157,8 +151,7 @@ static std::string Set(const std::string& before, const std::string& options)
     return after;
 }
 
-static void Vdf()
-{
+static void Vdf() {
     const std::string optLine = "\t\t\t\t\t\t\"LaunchOptions\"\t\t\"-dx11\"\n";
     {
         const std::string before = Replace(kLocalConfig, "%OPTIONS%", optLine);
@@ -200,8 +193,7 @@ static void Vdf()
     }
 }
 
-int main(int argc, char** argv)
-{
+int main(int argc, char** argv) {
     const std::string dir = argc > 1 ? argv[1] : "tests";
     Signature(dir);
     Paths();
