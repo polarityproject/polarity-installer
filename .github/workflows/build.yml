@@ -1,8 +1,9 @@
-# Builds both installers on every push and pull request, runs the Linux tests,
-# and keeps the binaries and their symbols as artifacts for two weeks. A
-# pushed v<version> tag (POLARITY_INSTALLER_VERSION) also attests them and
-# puts them in a draft GitHub Release, which the site's download buttons
-# link to once it's published.
+# Checks the formatting and builds both installers on every push and pull
+# request, runs the Linux tests, and keeps the binaries and their symbols as
+# artifacts for two weeks. A pushed v<version> tag
+# (POLARITY_INSTALLER_VERSION) also attests them and puts them in a draft
+# GitHub Release, which the site's download buttons link to once it's
+# published.
 name: build
 
 on:
@@ -20,6 +21,9 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Formatting
+        shell: pwsh
+        run: scripts/format.ps1 -Check
       - name: Build
         shell: pwsh
         run: scripts/build-windows.ps1
