@@ -1,0 +1,38 @@
+# Run as a report and triaged by hand, never as a gate. The checks left out
+# match the code's deliberate style (one-line ifs, several declarations per
+# line, numeric addresses) or need a naming or include convention the project
+# does not have.
+Checks: >
+  bugprone-*,
+  clang-analyzer-*,
+  performance-*,
+  readability-*,
+  misc-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-reserved-identifier,
+  -readability-magic-numbers,
+  -readability-identifier-length,
+  -readability-identifier-naming,
+  -readability-braces-around-statements,
+  -readability-isolate-declaration,
+  -readability-implicit-bool-conversion,
+  -readability-uppercase-literal-suffix,
+  -readability-else-after-return,
+  -readability-named-parameter,
+  -readability-avoid-const-params-in-decls,
+  -readability-math-missing-parentheses,
+  -readability-avoid-nested-conditional-operator,
+  -misc-include-cleaner,
+  -misc-use-anonymous-namespace,
+  -misc-non-private-member-variables-in-classes,
+  -misc-no-recursion,
+  -misc-const-correctness,
+  -performance-enum-size,
+  -performance-no-int-to-ptr,
+  -bugprone-suspicious-string-compare
+CheckOptions:
+  readability-function-cognitive-complexity.Threshold: 40
+  readability-function-size.LineThreshold: 120
+WarningsAsErrors: ''
+HeaderFilterRegex: '.*[\/]src[\/].+\.h$'

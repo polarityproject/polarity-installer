@@ -44,6 +44,8 @@ This writes `dist\polarity-installer-linux`, a static x86_64 binary with no depe
 
 Both scripts stamp the current commit into the build (with `-dirty` when the tree has changes) and keep that build's symbols in `dist\symbols\<commit>\`: the exe with its `.pdb`, and the Linux binary before stripping. It is how a crash in a player's log turns into file and line.
 
+clang-format sets the layout of the C++ sources (`.clang-format`). It comes with the Build Tools' "C++ Clang tools" component. `scripts\format.ps1` formats `src\` and `tests\`, and `scripts\format.ps1 -Check` lists the files that are not formatted.
+
 ## Releases
 
 GitHub Actions (`.github/workflows/build.yml`) runs both build scripts on every push to main and every pull request. To release, raise `POLARITY_INSTALLER_VERSION` in `src/installer/version.h`, then push a `v<version>` tag. The workflow attests both installers and puts them, with their symbols, in a draft release. Publish the draft and the site's download buttons, which link to the latest release's files, offer it.
