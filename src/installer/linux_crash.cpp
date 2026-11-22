@@ -137,7 +137,7 @@ void OnCrash(int sig, siginfo_t* info, void* context) {
         const pid_t pid = fork();
         if (pid == 0) {
             execve(g_crashWindow.argv[0], g_crashWindow.argv.data(), environ);
-            _exit(127);
+            _exit(kExecFailed);
         }
         int status;
         if (pid > 0) waitpid(pid, &status, 0);

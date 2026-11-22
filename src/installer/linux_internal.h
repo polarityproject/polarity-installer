@@ -37,6 +37,7 @@ constexpr const char* kSite = "https://polaritymod.link/update.json";
 constexpr const char* kTitle = "Polarity Installer";
 constexpr size_t kMaxInfoBytes = 64 * 1024;
 constexpr int kTimeoutMs = 20000;
+constexpr int kExecFailed = 127; // a child's exit code when its program did not start
 
 // Something the player is told about.
 struct Failure {

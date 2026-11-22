@@ -76,6 +76,16 @@ Both installers take:
 Windows only: `--find` prints the game folder Steam has and exits.
 Linux only: `--steam-root <folder>` uses that Steam folder instead of looking for one; `--terminal` asks in the terminal even when windows are available.
 
+## The Windows installer
+
+It installs the release's `files` and `more_files`, and never writes `polarity.ini`: the mod's defaults are the public setup. When the game folder needs administrator rights, the installer runs itself again as administrator for that folder; both write to the same log. A file still in use stays as it was until the next run. Error windows link to the log instead of showing its path, since a Task Dialog cuts a long path short. The system's version in the log comes from `RtlGetVersion`, because `GetVersionEx` reports what the manifest allows. A crash's stack is walked through the x64 unwind data and logged as `module+0xoffset`; each return address less one is inside the call, so a symbolizer gives the call's line.
+
+## Steam's files (Linux)
+
+`linux_steam.cpp` reads Steam's VDF files, with a byte order mark, `//` comments and platform conditions after an entry (`[$WIN32]`) allowed. Setting the launch options keeps the player's own: within `WINEDLLOVERRIDES`, the entries split by `;` keep their order after the installer's, and options that already load `xinput1_3` natively stay as they are. New entries go at the end of their block, with a closing brace that shared a line moved to a line of its own.
+
+The log (`install_log.cpp`) masks the home folder only as a whole folder (`/home/deck`, not `/home/deckard`) and uses CRLF line ends on Windows, so it opens in Notepad.
+
 ## The Linux installer
 
 | File | What it covers |

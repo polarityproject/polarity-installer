@@ -130,7 +130,7 @@ public:
             auto argv = Argv({"zenity", "--progress", std::string("--title=") + kTitle, "--width=460", "--auto-close",
                               "--text=" + Markup(heading), "--percentage=0"});
             execvp(argv[0], argv.data());
-            _exit(127);
+            _exit(kExecFailed);
         }
         close(fds[0]);
         fd_ = pid_ > 0 ? fds[1] : -1;

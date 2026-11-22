@@ -74,7 +74,6 @@ bool Open(const std::vector<std::string>& dirs) {
         if (dir.empty()) continue;
         const std::string path = Join(dir, kName);
 #ifdef _WIN32
-        // Shared: the elevated retry writes to it while this run ends.
         HANDLE h = CreateFileW(Wide(path).c_str(), FILE_APPEND_DATA | FILE_READ_ATTRIBUTES,
                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS,
                                FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -138,7 +137,6 @@ void Write(const std::string& line) {
     if (!g_home.empty()) {
         for (size_t at = text.find(g_home); at != std::string::npos; at = text.find(g_home, at + 1)) {
             const size_t end = at + g_home.size();
-            // Only the whole folder: /home/deck, not /home/deckard.
             if (end == text.size() || text[end] == '/' || text[end] == '\\' || text[end] == '"' || text[end] == ' ' ||
                 text[end] == ')' || text[end] == '\'') {
                 text.replace(at, g_home.size(), "~");
@@ -148,7 +146,6 @@ void Write(const std::string& line) {
     const std::string out = Now() + "  " + text + "\n";
 #ifdef _WIN32
     if (g_file == INVALID_HANDLE_VALUE) return;
-    // CRLF: the log opens in Notepad.
     std::string crlf;
     for (char c : out) {
         if (c == '\n') crlf += '\r';

@@ -29,7 +29,7 @@ bool Space(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
 class Parser {
 public:
     explicit Parser(std::string_view text) : s_(text) {
-        if (s_.substr(0, 3) == "\xEF\xBB\xBF") i_ = 3; // a byte order mark
+        if (s_.substr(0, 3) == "\xEF\xBB\xBF") i_ = 3;
     }
 
     bool Document(std::vector<VdfEntry>* out, std::string* error) {
@@ -136,7 +136,6 @@ private:
                 return Fail("no value for \"" + key.text + "\"");
             }
             out->push_back(std::move(e));
-            // A platform condition after an entry ([$WIN32]) is skipped.
             const size_t save = i_;
             Token cond;
             if (!Next(&cond) || cond.kind != Kind::String || cond.text.rfind("[$", 0) != 0) i_ = save;
@@ -165,8 +164,6 @@ std::string IndentOf(std::string_view text, size_t pos) {
     return std::string(text.substr(from, i - from));
 }
 
-// `text` with `lines` (indents relative to the block's entries) added as
-// the last entries of `block`.
 std::string InsertInBlock(std::string_view text, const VdfEntry& block, const std::vector<std::string>& lines) {
     const size_t close = block.vend - 1;
     const std::string outer = IndentOf(text, block.kstart), inner = outer + "\t";
@@ -176,7 +173,6 @@ std::string InsertInBlock(std::string_view text, const VdfEntry& block, const st
     const size_t lineStart = nl == std::string_view::npos ? 0 : nl + 1;
     std::string out;
     if (!Trim(text.substr(lineStart, close - lineStart)).empty()) {
-        // The closing brace shares its line with something: a line of its own.
         out.append(text.substr(0, close)).append("\n").append(body).append(outer).append(text.substr(close));
     } else {
         out.append(text.substr(0, lineStart)).append(body).append(text.substr(lineStart));
@@ -278,7 +274,6 @@ std::string WithOverride(std::string_view options) {
         if (o.find("%command%") != std::string::npos) return ours + " " + o;
         return ours + " %command%" + (o.empty() ? "" : " " + o);
     }
-    // The value: quoted, or up to the next space.
     const size_t vs = at + key.size();
     size_t ve = vs;
     std::string value;
@@ -292,7 +287,6 @@ std::string WithOverride(std::string_view options) {
         while (ve < o.size() && !std::isspace(static_cast<unsigned char>(o[ve])) && o[ve] != '"' && o[ve] != '\'') ve++;
         value = o.substr(vs, ve - vs);
     }
-    // Entries "dll[,dll...]=mode" split by ';': ours first, the rest kept.
     std::string merged = kOverride;
     size_t from = 0;
     while (from <= value.size()) {
@@ -303,7 +297,7 @@ std::string WithOverride(std::string_view options) {
         if (Trim(entry).empty()) continue;
         const size_t eq = entry.find('=');
         const std::string names = entry.substr(0, eq);
-        const std::string tail = eq == std::string::npos ? "" : entry.substr(eq); // "=mode"
+        const std::string tail = eq == std::string::npos ? "" : entry.substr(eq);
         const std::string mode = Lower(Trim(eq == std::string::npos ? "" : entry.substr(eq + 1)));
         std::vector<std::string> rest;
         bool mine = false;
@@ -318,7 +312,7 @@ std::string WithOverride(std::string_view options) {
             if (l == "xinput1_3" || l == "xinput1_3.dll") mine = true;
             else rest.push_back(dll);
         }
-        if (mine && !mode.empty() && mode[0] == 'n') return o; // loads it already
+        if (mine && !mode.empty() && mode[0] == 'n') return o;
         if (rest.empty()) continue;
         std::string joined;
         for (size_t i = 0; i < rest.size(); i++) joined += (i ? "," : "") + rest[i];

@@ -125,7 +125,7 @@ int RunCapture(const std::vector<std::string>& args, std::string* out) {
         close(fds[1]);
         auto argv = Argv(args);
         execvp(argv[0], argv.data());
-        _exit(127);
+        _exit(kExecFailed);
     }
     close(fds[1]);
     char buf[4096];

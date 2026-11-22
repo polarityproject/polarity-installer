@@ -1,29 +1,4 @@
-// polarity-installer.exe: installs the latest Polarity release into a
-// Street Fighter V folder on Windows.
-//
-// 1. Reads the site's signed update info (the mod updater's own check:
-//    update.json + update.json.sig, the key in mod/update_key.h).
-// 2. Finds the game through Steam (its libraries, app 310950), or asks for
-//    the folder.
-// 3. Downloads the release's files ("files" and "more_files"), checks each
-//    one's size and SHA-256, and puts them next to StreetFighterV.exe
-//    (StreetFighterV\Binaries\Win64), all or nothing.
-// 4. Says Polarity runs at the game's next start.
-//
-// It makes no shortcuts, no Start menu entries and no registry entries, and
-// never writes polarity.ini (the mod's defaults are the public setup). It
-// writes a log, polarity-installer.log, next to itself (install_log.h); a
-// crash adds its exception and stack there and tells the player where the
-// file is.
-//
-// Options (for tests and the elevated retry):
-//   --site <url>     update info other than https://polaritymod.link/update.json
-//   --game <folder>  the game folder (any of its levels down to Binaries\Win64)
-//   --yes            no questions: the folder found (or --game), messages
-//                    on stdout, exit code 0 when installed
-//   --find           prints the game folder Steam has (or nothing) and exits
-//   --test-crash <k> crashes on purpose after opening the log (segv, throw,
-//                    terminate), to test the crash report
+// polarity-installer.exe: installs the latest Polarity release on Windows (README.md).
 
 #include "core/update_info.h"
 #include "installer/install_log.h"
@@ -65,6 +40,9 @@ constexpr const wchar_t* kTitle = L"Polarity Installer";
 constexpr const char* kAppId = "310950";
 constexpr DWORD kTimeoutMs = 15000;
 constexpr size_t kMaxInfoBytes = 64 * 1024;
+constexpr DWORD kHttpOk = 200;
+constexpr int kProgressSteps = 1000;
+constexpr int kDialogWidth = 260;
 
 enum ButtonId { kInstall = 100,
                 kChoose,
@@ -81,8 +59,6 @@ struct Options {
 };
 
 Options g_opt;
-
-// ----- text ------------------------------------------------------------------
 
 std::wstring Wide(const std::string& s) {
     if (s.empty()) return {};
@@ -111,7 +87,6 @@ std::wstring Megabytes(uint64_t bytes) {
     return text;
 }
 
-// --yes: messages to the console the installer was started from.
 void Print(const std::wstring& text) {
     const std::string s = Utf8(text) + "\n";
     DWORD written = 0;
@@ -126,20 +101,14 @@ void Log(const std::wstring& line) {
     instlog::Write(Utf8(line));
 }
 
-// What follows a failure's message in the window that reports it.
-// --yes only: a window shows a link to the log instead (Ask), as a long path
-// gets cut short there.
 std::wstring LogNote() {
     return !g_opt.yes || instlog::Path().empty() ? L"" : L"\n\nDetails are in the installer's log:\n" + Wide(instlog::Path());
 }
 
-// Explorer at the log, the file selected.
 void ShowLogFile() {
     const std::wstring args = L"/select,\"" + Wide(instlog::Path()) + L"\"";
     ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
 }
-
-// ----- files -----------------------------------------------------------------
 
 bool IsFile(const std::wstring& path) {
     const DWORD a = GetFileAttributesW(path.c_str());
@@ -175,9 +144,6 @@ std::wstring Trimmed(std::wstring p) {
     return p;
 }
 
-// The game's Binaries\Win64 folder for a folder the player picked: the
-// library's StreetFighterV folder, the StreetFighterV inside it, Binaries,
-// or Win64 itself.
 std::optional<std::wstring> GameWin64(const std::wstring& picked) {
     const std::wstring p = Trimmed(picked);
     for (const std::wstring& c : {p + L"\\StreetFighterV\\Binaries\\Win64", p + L"\\Binaries\\Win64", p + L"\\Win64", p}) {
@@ -188,8 +154,6 @@ std::optional<std::wstring> GameWin64(const std::wstring& picked) {
     return std::nullopt;
 }
 
-// ----- Steam -----------------------------------------------------------------
-
 std::wstring RegString(HKEY root, const wchar_t* key, const wchar_t* name) {
     wchar_t value[MAX_PATH * 2] = {};
     DWORD size = sizeof(value);
@@ -197,7 +161,6 @@ std::wstring RegString(HKEY root, const wchar_t* key, const wchar_t* name) {
     return value;
 }
 
-// A VDF string's text: \\ -> \, \" -> ".
 std::string VdfUnescape(const std::string& s) {
     std::string out;
     for (size_t i = 0; i < s.size(); i++) {
@@ -254,8 +217,6 @@ std::optional<std::wstring> FindGame() {
     return std::nullopt;
 }
 
-// The library's StreetFighterV folder (two levels above Binaries\Win64,
-// then one more), for showing the player.
 std::wstring GameRoot(const std::wstring& win64) {
     std::wstring p = win64;
     for (int i = 0; i < 3; i++) {
@@ -266,7 +227,6 @@ std::wstring GameRoot(const std::wstring& win64) {
     return p;
 }
 
-// Whether a StreetFighterV.exe is running (the launcher or the game).
 bool GameRunning() {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snap == INVALID_HANDLE_VALUE) return false;
@@ -280,14 +240,11 @@ bool GameRunning() {
     return found;
 }
 
-// ----- download --------------------------------------------------------------
-
 std::atomic<bool> g_cancel{false};
 
 bool HttpGetOnce(const std::string& url, size_t maxBytes, std::vector<uint8_t>* out, std::wstring* error,
                  const std::function<void(uint64_t)>& progress);
 
-// HttpGetOnce with the request and its result in the log.
 bool HttpGet(const std::string& url, size_t maxBytes, std::vector<uint8_t>* out, std::wstring* error,
              const std::function<void(uint64_t)>& progress = nullptr) {
     Log("GET " + url);
@@ -325,7 +282,7 @@ bool HttpGetOnce(const std::string& url, size_t maxBytes, std::vector<uint8_t>* 
             DWORD status = 0, size = sizeof(status);
             WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX,
                                 &status, &size, WINHTTP_NO_HEADER_INDEX);
-            if (status != 200) {
+            if (status != kHttpOk) {
                 *error = L"The Polarity site answered " + std::to_wstring(status) + L" for " + wurl + L".";
             } else {
                 out->clear();
@@ -373,8 +330,6 @@ bool HttpGetOnce(const std::string& url, size_t maxBytes, std::vector<uint8_t>* 
     return ok;
 }
 
-// The site's update info, checked against the release key before anything
-// in it counts.
 bool FetchInfo(sfv::UpdateInfo* info, std::wstring* error) {
     std::vector<uint8_t> body, sig;
     if (!HttpGet(g_opt.site, kMaxInfoBytes, &body, error) || !HttpGet(g_opt.site + ".sig", 4096, &sig, error)) return false;
@@ -421,8 +376,6 @@ struct InstallResult {
     std::wstring error;
 };
 
-// Downloads what differs from the game folder, then swaps it in: old files
-// aside first, so a failure puts everything back.
 InstallResult Install(const std::wstring& win64, const sfv::UpdateInfo& info, Progress* progress) {
     InstallResult r;
 
@@ -507,7 +460,6 @@ InstallResult Install(const std::wstring& win64, const sfv::UpdateInfo& info, Pr
         }
         swapped.push_back(&it);
     }
-    // The files it replaced; one still in use stays until the next run.
     for (const Item& it : items) {
         if (it.hadOld) DeleteFileW(it.old.c_str());
     }
@@ -515,8 +467,6 @@ InstallResult Install(const std::wstring& win64, const sfv::UpdateInfo& info, Pr
     r.ok = true;
     return r;
 }
-
-// ----- dialogs ---------------------------------------------------------------
 
 struct Button {
     int id;
@@ -531,7 +481,6 @@ HRESULT CALLBACK AskCallback(HWND, UINT msg, WPARAM, LPARAM, LONG_PTR) {
     return S_OK;
 }
 
-// An error window also links to the log.
 int Ask(const std::wstring& heading, const std::wstring& text, const std::vector<Button>& buttons,
         PCWSTR icon = nullptr, TASKDIALOG_COMMON_BUTTON_FLAGS common = TDCBF_CANCEL_BUTTON) {
     std::vector<TASKDIALOG_BUTTON> b;
@@ -584,7 +533,7 @@ HRESULT CALLBACK WorkCallback(HWND hwnd, UINT msg, WPARAM wParam, LPARAM, LONG_P
     auto* w = reinterpret_cast<WorkDialog*>(ref);
     switch (msg) {
         case TDN_CREATED:
-            SendMessageW(hwnd, TDM_SET_PROGRESS_BAR_RANGE, 0, MAKELPARAM(0, 1000));
+            SendMessageW(hwnd, TDM_SET_PROGRESS_BAR_RANGE, 0, MAKELPARAM(0, kProgressSteps));
             SendMessageW(hwnd, TDM_SET_PROGRESS_BAR_MARQUEE, TRUE, 0);
             break;
         case TDN_TIMER: {
@@ -595,7 +544,7 @@ HRESULT CALLBACK WorkCallback(HWND hwnd, UINT msg, WPARAM wParam, LPARAM, LONG_P
             const uint64_t total = w->progress->total, done = w->progress->done;
             if (total > 0) {
                 SendMessageW(hwnd, TDM_SET_MARQUEE_PROGRESS_BAR, FALSE, 0);
-                SendMessageW(hwnd, TDM_SET_PROGRESS_BAR_POS, static_cast<WPARAM>(done * 1000 / total), 0);
+                SendMessageW(hwnd, TDM_SET_PROGRESS_BAR_POS, static_cast<WPARAM>(done * kProgressSteps / total), 0);
                 const std::wstring text = Megabytes(done) + L" of " + Megabytes(total);
                 if (text != w->shown) {
                     w->shown = text;
@@ -611,7 +560,6 @@ HRESULT CALLBACK WorkCallback(HWND hwnd, UINT msg, WPARAM wParam, LPARAM, LONG_P
     return S_OK;
 }
 
-// Runs `work` on a thread behind a progress dialog (none with --yes).
 void RunWithProgress(const std::wstring& heading, const std::function<void(Progress*)>& work) {
     Progress progress;
     std::thread t([&] {
@@ -629,7 +577,7 @@ void RunWithProgress(const std::wstring& heading, const std::function<void(Progr
         c.dwCommonButtons = TDCBF_CANCEL_BUTTON;
         c.pfCallback = WorkCallback;
         c.lpCallbackData = reinterpret_cast<LONG_PTR>(&w);
-        c.cxWidth = 260;
+        c.cxWidth = kDialogWidth;
         TaskDialogIndirect(&c, nullptr, nullptr, nullptr);
     }
     t.join();
@@ -666,8 +614,6 @@ std::optional<std::wstring> PickFolder(const std::wstring& start) {
     return out;
 }
 
-// The game folder to install into: the one Steam has (confirmed), or one
-// the player picks.
 std::optional<std::wstring> ChooseGame(const sfv::UpdateInfo& info) {
     std::optional<std::wstring> win64;
     if (!g_opt.game.empty()) {
@@ -709,7 +655,6 @@ std::optional<std::wstring> ChooseGame(const sfv::UpdateInfo& info) {
     }
 }
 
-// The same installer again as administrator, for this folder.
 bool RelaunchElevated(const std::wstring& win64) {
     wchar_t exe[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, exe, MAX_PATH);
@@ -742,10 +687,6 @@ void ParseArgs() {
     LocalFree(argv);
 }
 
-// ----- the log and crashes -----------------------------------------------------------
-
-// The crash window's text, made at the start: a crash handler should not
-// have to build it.
 std::wstring g_crashText;
 
 void PrepareCrashText() {
@@ -763,7 +704,6 @@ void RawText(const char* s) {
     instlog::WriteRaw(s, std::strlen(s));
 }
 
-// "module+0xoffset" for a code address.
 void RawWhere(DWORD64 address) {
     char line[MAX_PATH + 48];
     HMODULE module = nullptr;
@@ -780,9 +720,6 @@ void RawWhere(DWORD64 address) {
     RawText(line);
 }
 
-// The stack from `context` up, through the x64 unwind data (offsets read
-// against the build's .pdb). Past the first, each is a return address less
-// one: inside the call, so a symbolizer gives the call's line.
 void RawStack(CONTEXT context) {
     RawText("  stack:");
     for (int i = 0; i < 32 && context.Rip != 0; i++) {
@@ -795,7 +732,6 @@ void RawStack(CONTEXT context) {
             DWORD64 establisher = 0;
             RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, fn, &context, &handlerData, &establisher, nullptr);
         } else {
-            // A leaf function: the return address is on top of the stack.
             context.Rip = *reinterpret_cast<const DWORD64*>(context.Rsp);
             context.Rsp += 8;
         }
@@ -847,7 +783,6 @@ void InstallCrashHandlers() {
     _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
 }
 
-// polarity-installer.log next to the installer, else in the temp folder.
 void OpenLog() {
     wchar_t profile[MAX_PATH] = {};
     if (GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH)) instlog::SetHome(Utf8(profile));
@@ -873,7 +808,6 @@ void LogStart() {
     std::wstring rest = args == std::wstring::npos || args >= command.size() ? L"" : command.substr(args);
     rest.erase(0, rest.find_first_not_of(L' '));
     Log(L"command: " + (rest.empty() ? std::wstring(L"(none)") : rest));
-    // RtlGetVersion: GetVersionEx reports what the manifest allows.
     RTL_OSVERSIONINFOW v{};
     v.dwOSVersionInfoSize = sizeof(v);
     using RtlGetVersionFn = LONG(WINAPI*)(RTL_OSVERSIONINFOW*);
@@ -889,7 +823,6 @@ void LogStart() {
         std::to_string(v.dwBuildNumber) + (admin ? ", as administrator" : ""));
 }
 
-// A deliberate crash, to test the report (--test-crash).
 __declspec(noinline) void TestCrash(const std::string& kind) {
     Log("crashing on purpose: " + kind);
     if (kind == "segv") {
