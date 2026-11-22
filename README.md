@@ -17,7 +17,7 @@ Neither installer creates desktop shortcuts, menu entries or Steam shortcuts. Th
 | Path | What |
 | --- | --- |
 | `src/installer/installer_win.cpp` | Windows installer (`polarity-installer.exe`, Task Dialog windows) |
-| `src/installer/installer_linux.cpp` | Linux installer (one static binary; zenity or kdialog windows, the terminal otherwise) |
+| `src/installer/installer_linux.cpp`, `linux_*.cpp` | Linux installer (one static binary; zenity or kdialog windows, the terminal otherwise; files below) |
 | `src/installer/linux_steam.*` | Steam's VDF files, the launch options, the game folder rules (Linux) |
 | `src/installer/install_log.*` | The installer's log, shared by both |
 | `src/installer/version.h` | The installers' version, and the commit the build scripts stamp in |
@@ -75,6 +75,23 @@ Both installers take:
 
 Windows only: `--find` prints the game folder Steam has and exits.
 Linux only: `--steam-root <folder>` uses that Steam folder instead of looking for one; `--terminal` asks in the terminal even when windows are available.
+
+## The Linux installer
+
+| File | What it covers |
+| --- | --- |
+| `installer_linux.cpp` | the steps, the options and `main` |
+| `linux_system.cpp` | files and processes |
+| `linux_download.cpp` | the release info and files over HTTP(S), and swapping them in |
+| `linux_steam_control.cpp` | Steam's folders and libraries, closing and opening Steam, the launch options |
+| `linux_ui.cpp` | zenity, kdialog or terminal questions, and what they asked in the log |
+| `linux_crash.cpp` | the log, and the crash report |
+
+Downloads follow redirects. The installer uses the system's trusted roots when it finds a bundle where distributions keep one. Without one the download still goes ahead, since what it fetches only counts once the signature and the hashes check out. New files are swapped in with the old ones moved aside first, so a failure puts everything back.
+
+The launch options are read and set only while Steam is closed: a running Steam holds them in memory, an edit in Properties reaches the file only when Steam closes, and Steam then writes over the file. Each `localconfig.vdf` it changes keeps a copy of the file as it was next to it.
+
+The crash handler writes only with raw system calls, `fork` and `execve`, since nothing else is safe in a signal handler. It walks the stack through the frame pointers while they are in the installer's own code; libc keeps no frame pointer. Each return address less one is an address inside the call, which `addr2line` resolves to the call's line. A binary linked with `-static` is at a fixed address even when its code was built with `-fPIE`, so the handler takes off the load address only for a position-independent build. The crash window is set up at the start, because a signal handler cannot build it. Ctrl+C, a closed terminal or a kill is noted in the log before the installer ends.
 
 ## Running on Linux
 

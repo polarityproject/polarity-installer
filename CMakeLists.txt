@@ -60,7 +60,8 @@ else()
 
   # Linked with symbols; the build script strips the copy it ships and keeps
   # this one to read the crash addresses in a log.
-  add_executable(polarity-installer src/installer/installer_linux.cpp src/installer/install_log.cpp)
+  add_executable(polarity-installer src/installer/installer_linux.cpp src/installer/linux_system.cpp src/installer/linux_download.cpp
+                 src/installer/linux_steam_control.cpp src/installer/linux_ui.cpp src/installer/linux_crash.cpp src/installer/install_log.cpp)
   target_link_libraries(polarity-installer PRIVATE shared)
   target_link_options(polarity-installer PRIVATE -static)
 
