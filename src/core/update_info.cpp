@@ -27,7 +27,6 @@ constexpr size_t kMaxFileName = 64;
 constexpr size_t kSha256HexChars = 64, kSha256Bytes = 32;
 constexpr double kMaxFileBytes = 256.0 * 1024 * 1024;
 constexpr size_t kSignatureBytes = 64, kPublicKeyBytes = 64, kCoordinateBytes = 32;
-constexpr uint8_t kUncompressedPoint = 0x04;
 
 void SplitVersion(const std::string& v, std::vector<long>* numbers, std::string* suffix) {
     const size_t dash = v.find('-');
@@ -220,6 +219,7 @@ bool VerifySignature(const uint8_t* data, size_t size, const uint8_t* signature,
     for (uint8_t b : publicKey) anyKey |= b != 0;
     if (!anyKey) return false;
 #ifndef _WIN32
+    constexpr uint8_t kUncompressedPoint = 0x04;
     uint8_t digest[kSha256Bytes] = {};
     mbedtls_sha256(data, size, digest, 0);
     uint8_t point[1 + kPublicKeyBytes] = {kUncompressedPoint};
